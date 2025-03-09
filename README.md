@@ -1,11 +1,13 @@
-# Google Transcribe Application
+# Realtime Conversation Helper
 
-A real-time speech transcription application that uses Google Speech-to-Text API for transcription and Google Gemini AI for generating contextual suggestions based on the transcribed speech.
+A real-time speech transcription application that uses Google Speech-to-Text API for transcription and Google Gemini AI for generating contextual suggestions and AI chat capabilities based on the transcribed speech.
 
 ## Features
 
 - Real-time speech transcription using Google Speech-to-Text API
 - AI-powered suggestions using Google Gemini AI
+- Interactive AI chat for dynamic conversation assistance
+- Contextual awareness for more relevant responses
 - Ability to use document context for more relevant suggestions
 - Minimalist, always-on-top UI
 - Draggable interface
@@ -22,8 +24,8 @@ A real-time speech transcription application that uses Google Speech-to-Text API
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/test_google_transcribe.git
-   cd test_google_transcribe
+   git clone git@github.com:xs00001111/realtime_convo_helper.git
+   cd realtime_convo_helper
    ```
 
 2. Install dependencies:
@@ -53,15 +55,27 @@ A real-time speech transcription application that uses Google Speech-to-Text API
 
 4. AI-powered suggestions will appear based on your speech content.
 
+5. Engage with the AI chat for interactive conversation assistance and follow-up questions.
+
 ### Using Document Context
 
-You can provide a document as context for the AI suggestions:
+You can provide a document as context for the AI suggestions and chat:
 
 ```
 npm start -- --file=/path/to/your/document.pdf
 ```
 
 Supported file types include text files, PDFs, and common image formats.
+
+### AI Chat Capabilities
+
+The AI chat feature provides:
+
+- Real-time conversation assistance based on your speech
+- Contextual awareness that builds on previous exchanges
+- Ability to ask follow-up questions for clarification
+- Document-aware responses when a context file is provided
+- Intelligent suggestions that adapt to your conversation flow
 
 ## Development
 
