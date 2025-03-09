@@ -17,11 +17,13 @@
     }
     
     .container {
-      height: 100vh;
+      min-height: 200px;
+      max-height: 80vh;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
       padding: 10px;
+      overflow-y: auto;
     }
     
     .header {
@@ -34,7 +36,7 @@
     .header-bottom {
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
       margin-top: 5px;
     }
 
@@ -54,17 +56,21 @@
     .conversation-area {
       flex-grow: 1;
       display: flex;
-      align-items: center;
+      flex-direction: column;
       margin-bottom: 0;
+      max-height: 200px;
+      overflow-y: auto;
     }
 
     .controls {
       display: flex;
       justify-content: flex-end;
-      align-items: center;
+      align-items: flex-start;
       padding: 0;
       -webkit-app-region: no-drag;
       margin: 0 0 0 10px;
+      position: sticky;
+      top: 0;
     }
 
     .recording-controls {
@@ -531,6 +537,11 @@
     
     // Add a human message to the conversation
     function addHumanMessage(text) {
+      // Clear previous messages
+      while (conversationArea.firstChild) {
+        conversationArea.removeChild(conversationArea.firstChild);
+      }
+      
       // Create message container
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message human-message';
@@ -549,6 +560,10 @@
     
     // Add an AI message to the conversation
     function addAIMessage(text) {
+      // Remove any existing AI messages
+      const aiMessages = conversationArea.querySelectorAll('.welcome-message');
+      aiMessages.forEach(msg => conversationArea.removeChild(msg));
+      
       // Create message container
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message welcome-message';
