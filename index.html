@@ -17,19 +17,67 @@
     }
     
     .container {
-      padding: 10px;
-      padding-bottom: 20px;
       height: 100vh;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
+      padding: 10px;
     }
     
     .header {
       display: flex;
+      flex-direction: column;
+      gap: 5px;
+      margin-bottom: 5px;
+    }
+
+    .header-bottom {
+      display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 10px;
+      margin-top: 5px;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    .conversation-area {
+      flex-grow: 1;
+      display: flex;
+      align-items: center;
+      margin-bottom: 0;
+    }
+
+    .controls {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      padding: 0;
+      -webkit-app-region: no-drag;
+      margin: 0 0 0 10px;
+    }
+
+    .recording-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .welcome-message {
+      margin: 0;
+      background-color: rgba(80, 80, 80, 0.7);
+      padding: 8px 12px;
+      border-radius: 8px;
+      flex-grow: 1;
     }
     
     .title {
@@ -45,27 +93,34 @@
     }
 
     .window-controls button {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
+      width: 5px;
+      height: 15px;
+      border-radius: 3px;
       border: none;
       padding: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       transition: all 0.3s ease;
-      color: rgba(255, 255, 255, 0.8);
-      backdrop-filter: blur(5px);
-      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+      background-color: rgba(0, 0, 0, 0.7);
+    }
+
+    .window-controls button:hover {
+      background-color: rgba(255, 255, 255, 0.1);
     }
 
     .window-controls button:focus {
       outline: none;
     }
 
-    .window-controls button .material-icons {
-      font-size: 16px;
+    .window-controls button .fas {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.7);
       transition: all 0.2s ease;
+    }
+
+    .window-controls button:hover .fas {
+      color: rgba(255, 255, 255, 0.9);
     }
 
     #minimize {
@@ -73,12 +128,7 @@
     }
 
     #minimize:hover {
-      background-color: rgba(255, 189, 76, 0.7);
-      transform: translateY(-1px);
-    }
-
-    #minimize:hover .material-icons {
-      color: rgba(0, 0, 0, 0.7);
+      background-color: rgba(255, 189, 76, 1);
     }
 
     #close {
@@ -86,12 +136,7 @@
     }
 
     #close:hover {
-      background-color: rgba(255, 95, 87, 0.7);
-      transform: translateY(-1px);
-    }
-
-    #close:hover .material-icons {
-      color: rgba(0, 0, 0, 0.7);
+      background-color: rgba(255, 95, 87, 1);
     }
     
     .conversation-area {
@@ -120,6 +165,15 @@
       align-self: flex-end;
       background-color: rgba(0, 100, 255, 0.7);
       border-top-right-radius: 2px;
+    }
+
+    .welcome-message {
+      align-self: flex-start;
+      background-color: rgba(80, 80, 80, 0.7);
+      border-radius: 8px;
+      margin-top: 10px;
+      width: 100%;
+      box-sizing: border-box;
     }
     
     .message-label {
@@ -164,16 +218,17 @@
     
     .controls {
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
-      padding: 5px;
+      padding: 0;
       -webkit-app-region: no-drag;
-      margin-top: auto;
+      margin-top: 0;
     }
     
     .recording-controls {
       display: flex;
       gap: 8px;
+      margin-left: auto;
     }
     
     .window-controls {
@@ -295,19 +350,32 @@
 <body>
   <div class="container">
     <div class="header">
-      <div class="title">
-        <div class="logo">
-          <div class="logo-icon">
-            <div class="logo-circle"></div>
-            <div class="logo-square"></div>
-            <div class="logo-line"></div>
+      <div class="header-top">
+        <div class="title">
+          <div class="logo">
+            <div class="logo-icon">
+              <div class="logo-circle"></div>
+              <div class="logo-square"></div>
+              <div class="logo-line"></div>
+            </div>
           </div>
-          
+        </div>
+        <div class="window-controls">
+          <button id="minimize"><i class="fas fa-minus"></i></button>
+          <button id="close"><i class="fas fa-times"></i></button>
         </div>
       </div>
-      <div class="window-controls">
-        <button id="minimize"><i class="fas fa-minus"></i></button>
-        <button id="close"><i class="fas fa-times"></i></button>
+      <div class="header-bottom">
+        <div class="conversation-area" id="conversation-area">
+          <!-- Conversation messages will be added here dynamically -->
+        </div>
+        <div class="controls">
+          <div class="recording-controls">
+            <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
+            <button id="start-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
+            <button id="stop-recording" disabled title="Stop Recording"><i class="fas fa-stop"></i></button>
+          </div>
+        </div>
       </div>
     </div>
     
@@ -319,18 +387,6 @@
         <button class="context-btn" id="set-text-context">Set</button>
         <input type="file" id="file-input" class="file-input">
         <button class="context-btn" id="upload-file">Upload File</button>
-      </div>
-    </div>
-    
-    <div class="conversation-area" id="conversation-area">
-      <!-- Conversation messages will be added here dynamically -->
-    </div>
-    
-    <div class="controls">
-      <div class="recording-controls">
-        <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
-        <button id="start-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
-        <button id="stop-recording" disabled title="Stop Recording"><i class="fas fa-stop"></i></button>
       </div>
     </div>
   </div>
@@ -353,11 +409,81 @@
     
     // State variables
     let isRecording = false;
+    let typingEffect = null;
     
     // Initialize the UI
     function initializeUI() {
-      // Add a welcome message
-      addAIMessage('Welcome to Realtime Conversation Helper! Click "Start Recording" to begin transcribing your conversation.');
+      // Add a welcome message with typing effect
+      const welcomePrefix = '';
+      const typingTexts = [
+        'Provide me hints in job interview',
+        'Provide me hints in sales meeting',
+        'Provide me hints in podcast recording'
+      ];
+      
+      // Add initial welcome message
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message welcome-message';
+      
+      const welcomeSpan = document.createElement('span');
+      welcomeSpan.textContent = welcomePrefix;
+      welcomeSpan.style.textAlign = 'left';
+      welcomeSpan.style.alignSelf = 'flex-start';
+      
+      const typingSpan = document.createElement('span');
+      typingSpan.id = 'typing-text';
+      typingSpan.style.textAlign = 'left';
+      typingSpan.style.alignSelf = 'flex-start';
+      
+      messageDiv.appendChild(welcomeSpan);
+      messageDiv.appendChild(typingSpan);
+    //   messageDiv.appendChild(recordingSpan);
+      
+      conversationArea.appendChild(messageDiv);
+      
+      // Start the typing effect
+      startTypingEffect(typingTexts, typingSpan);
+    }
+    
+    // Function to create typing effect
+    function startTypingEffect(texts, element) {
+      let textIndex = 0;
+      let charIndex = 0;
+      let isDeleting = false;
+      let typingDelay = 100; // Delay between each character typing
+      let deletingDelay = 50; // Faster when deleting
+      let pauseDelay = 1000; // Pause when text is fully typed
+      
+      function type() {
+        const currentText = texts[textIndex];
+        
+        if (isDeleting) {
+          // Deleting text
+          element.textContent = currentText.substring(0, charIndex - 1);
+          charIndex--;
+          typingDelay = deletingDelay;
+          
+          if (charIndex === 0) {
+            isDeleting = false;
+            textIndex = (textIndex + 1) % texts.length;
+            typingDelay = 100;
+          }
+        } else {
+          // Typing text
+          element.textContent = currentText.substring(0, charIndex + 1);
+          charIndex++;
+          
+          if (charIndex === currentText.length) {
+            isDeleting = true;
+            typingDelay = pauseDelay; // Pause before deleting
+          }
+        }
+        
+        typingEffect = setTimeout(type, typingDelay);
+      }
+      
+      // Start the typing effect
+      type();
     }
     
     // Handle recording status updates
@@ -425,7 +551,7 @@
     function addAIMessage(text) {
       // Create message container
       const messageDiv = document.createElement('div');
-      messageDiv.className = 'message ai-message';
+      messageDiv.className = 'message welcome-message';
       
       // Add message text
       const messageText = document.createElement('div');
