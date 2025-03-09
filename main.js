@@ -53,6 +53,34 @@ function createWindow() {
   ipcMain.on('close', () => {
     app.quit();
   });
+  
+  // Handle start recording button click
+  ipcMain.on('start-recording', () => {
+    if (serverProcess) {
+      serverProcess.send({ type: 'start-recording' });
+    }
+  });
+  
+  // Handle stop recording button click
+  ipcMain.on('stop-recording', () => {
+    if (serverProcess) {
+      serverProcess.send({ type: 'stop-recording' });
+    }
+  });
+  
+  // Handle set context from text
+  ipcMain.on('set-context-text', (event, text) => {
+    if (serverProcess) {
+      serverProcess.send({ type: 'set-context', data: { text } });
+    }
+  });
+  
+  // Handle set context from file
+  ipcMain.on('set-context-file', (event, filePath) => {
+    if (serverProcess) {
+      serverProcess.send({ type: 'set-context', data: { file: filePath } });
+    }
+  });
 }
 
 // This method will be called when Electron has finished initialization
@@ -70,6 +98,14 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('transcript', message.data);
     } else if (message.type === 'suggestion' && mainWindow) {
       mainWindow.webContents.send('suggestion', message.data);
+    } else if (message.type === 'recording-status' && mainWindow) {
+      mainWindow.webContents.send('recording-status', message.data);
+    } else if (message.type === 'context-update' && mainWindow) {
+      mainWindow.webContents.send('context-update', message.data);
+    } else if (message.type === 'error' && mainWindow) {
+      mainWindow.webContents.send('error', message.data);
+    } else if (message.type === 'ready' && mainWindow) {
+      mainWindow.webContents.send('ready', message.data);
     }
   });
   

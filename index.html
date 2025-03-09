@@ -2,14 +2,15 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Transcription Overlay</title>
+  <title>Realtime Conversation Helper</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
     body {
       margin: 0;
       padding: 0;
       font-family: 'Helvetica Neue', Arial, sans-serif;
       overflow: hidden;
-      background-color: rgba(0, 0, 0, 0.5);
+      background-color: rgba(0, 0, 0, 0.7);
       color: white;
       -webkit-app-region: drag;
       border-radius: 10px;
@@ -24,42 +25,160 @@
       justify-content: flex-start;
     }
     
-    .transcript-container {
-      margin-bottom: 5px;
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
     }
     
-    .transcript {
+    .title {
       font-size: 16px;
-      color: #ffffff;
-      background-color: rgba(0, 0, 0, 0.7);
-      padding: 10px;
-      border-radius: 8px;
-      max-height: 100px;
+      font-weight: bold;
+    }
+    
+    .window-controls {
+      display: flex;
+      -webkit-app-region: no-drag;
+      gap: 8px;
+      margin-right: 8px;
+    }
+
+    .window-controls button {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      color: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(5px);
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    }
+
+    .window-controls button:focus {
+      outline: none;
+    }
+
+    .window-controls button .material-icons {
+      font-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    #minimize {
+      background-color: rgba(255, 189, 76, 0.2);
+    }
+
+    #minimize:hover {
+      background-color: rgba(255, 189, 76, 0.7);
+      transform: translateY(-1px);
+    }
+
+    #minimize:hover .material-icons {
+      color: rgba(0, 0, 0, 0.7);
+    }
+
+    #close {
+      background-color: rgba(255, 95, 87, 0.2);
+    }
+
+    #close:hover {
+      background-color: rgba(255, 95, 87, 0.7);
+      transform: translateY(-1px);
+    }
+
+    #close:hover .material-icons {
+      color: rgba(0, 0, 0, 0.7);
+    }
+    
+    .conversation-area {
+      flex-grow: 1;
       overflow-y: auto;
+      margin-bottom: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
     
-    .suggestion-container {
-      margin-top: 2px;
+    .message {
+      padding: 8px 12px;
+      border-radius: 8px;
+      max-width: 90%;
+      word-wrap: break-word;
+    }
+    
+    .human-message {
+      align-self: flex-start;
+      background-color: rgba(50, 50, 50, 0.8);
+      border-top-left-radius: 2px;
+    }
+    
+    .ai-message {
+      align-self: flex-end;
+      background-color: rgba(0, 100, 255, 0.7);
+      border-top-right-radius: 2px;
+    }
+    
+    .message-label {
+      font-size: 12px;
+      opacity: 0.7;
+      margin-bottom: 4px;
+    }
+    
+    .context-area {
+      background-color: rgba(40, 40, 40, 0.7);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      display: none;
+    }
+    
+    .context-title {
+      font-weight: bold;
       margin-bottom: 5px;
     }
     
-    .suggestion {
-      font-size: 16px;
-      color: #ffffff;
-      background-color: rgba(0, 100, 255, 0.7);
-      padding: 10px;
-      border-radius: 8px;
+    .context-content {
+      font-size: 14px;
       max-height: 80px;
       overflow-y: auto;
     }
     
+    .context-controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .context-input {
+      flex-grow: 1;
+      background-color: rgba(60, 60, 60, 0.7);
+      border: 1px solid rgba(100, 100, 100, 0.7);
+      border-radius: 4px;
+      color: white;
+      padding: 5px;
+      -webkit-app-region: no-drag;
+    }
+    
     .controls {
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
       padding: 5px;
       -webkit-app-region: no-drag;
       margin-top: auto;
+    }
+    
+    .recording-controls {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .window-controls {
+      display: flex;
+      gap: 8px;
     }
     
     button {
@@ -70,46 +189,317 @@
       border-radius: 4px;
       cursor: pointer;
       -webkit-app-region: no-drag;
-      margin-left: 8px;
-      min-width: 70px;
+      min-width: 40px;
+      transition: background-color 0.2s;
+      position: relative;
     }
     
     button:hover {
       background-color: rgba(255, 255, 255, 0.3);
     }
+    
+    button.active {
+      background-color: rgba(255, 50, 50, 0.7);
+    }
+    
+    button.context-btn {
+      min-width: 40px;
+      padding: 5px;
+    }
+    
+    /* Tooltip styles for button hover */
+    button[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      bottom: -25px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      white-space: nowrap;
+      z-index: 10;
+    }
+    
+    .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: #555;
+      display: inline-block;
+      margin-right: 5px;
+    }
+    
+    .status-indicator.recording {
+      background-color: #f55;
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+    
+    .file-input {
+      display: none;
+    }
+
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      margin-right: 10px;
+    }
+    
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      position: relative;
+      margin-right: 8px;
+    }
+    
+    .logo-circle {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      /* border-radius: 50%; */
+      background-color: #ff9500;
+      top: 2px;
+      left: 2px;
+    }
+    
+    .logo-square {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      background-color: #00c853;
+      bottom: 2px;
+      right: 2px;
+    }
+    
+    .logo-line {
+      position: absolute;
+      width: 16px;
+      height: 2px;
+      background-color: #3cc8ff;
+      transform: rotate(135deg);
+      top: 11px;
+      left: 5px;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="transcript-container">
-      <div class="transcript" id="transcript">Waiting for transcription...</div>
+    <div class="header">
+      <div class="title">
+        <div class="logo">
+          <div class="logo-icon">
+            <div class="logo-circle"></div>
+            <div class="logo-square"></div>
+            <div class="logo-line"></div>
+          </div>
+          
+        </div>
+      </div>
+      <div class="window-controls">
+        <button id="minimize"><i class="fas fa-minus"></i></button>
+        <button id="close"><i class="fas fa-times"></i></button>
+      </div>
     </div>
-    <div class="suggestion-container">
-      <div class="suggestion" id="suggestion">AI suggestions will appear here...</div>
+    
+    <div class="context-area" id="context-area">
+      <div class="context-title">Context</div>
+      <div class="context-content" id="context-content">No context provided yet.</div>
+      <div class="context-controls">
+        <input type="text" class="context-input" id="context-text" placeholder="Paste text for context..." -webkit-app-region="no-drag">
+        <button class="context-btn" id="set-text-context">Set</button>
+        <input type="file" id="file-input" class="file-input">
+        <button class="context-btn" id="upload-file">Upload File</button>
+      </div>
     </div>
+    
+    <div class="conversation-area" id="conversation-area">
+      <!-- Conversation messages will be added here dynamically -->
+    </div>
+    
     <div class="controls">
-      <button id="minimize">Minimize</button>
-      <button id="close">Close</button>
+      <div class="recording-controls">
+        <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
+        <button id="start-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
+        <button id="stop-recording" disabled title="Stop Recording"><i class="fas fa-stop"></i></button>
+      </div>
     </div>
   </div>
 
   <script>
     // DOM elements
-    const transcriptElement = document.getElementById('transcript');
-    const suggestionElement = document.getElementById('suggestion');
+    const conversationArea = document.getElementById('conversation-area');
+    const startRecordingButton = document.getElementById('start-recording');
+    const stopRecordingButton = document.getElementById('stop-recording');
     const minimizeButton = document.getElementById('minimize');
     const closeButton = document.getElementById('close');
+    const statusIndicator = document.getElementById('status-indicator');
+    const contextArea = document.getElementById('context-area');
+    const contextContent = document.getElementById('context-content');
+    const contextText = document.getElementById('context-text');
+    const setTextContextButton = document.getElementById('set-text-context');
+    const uploadFileButton = document.getElementById('upload-file');
+    const fileInput = document.getElementById('file-input');
+    const toggleContextButton = document.getElementById('toggle-context');
     
-    // Handle incoming transcript data using Electron IPC
-    window.electron.onTranscript((data) => {
-      console.log('[DEBUG] Received transcript:', data);
-      transcriptElement.textContent = data.text;
+    // State variables
+    let isRecording = false;
+    
+    // Initialize the UI
+    function initializeUI() {
+      // Add a welcome message
+      addAIMessage('Welcome to Realtime Conversation Helper! Click "Start Recording" to begin transcribing your conversation.');
+    }
+    
+    // Handle recording status updates
+    window.electron.onRecordingStatus((data) => {
+      isRecording = data.isRecording;
+      updateRecordingUI();
     });
     
-    // Handle incoming suggestion data using Electron IPC
+    // Handle ready event
+    window.electron.onReady((data) => {
+      console.log('[DEBUG] App ready:', data);
+      updateRecordingUI();
+    });
+    
+    // Handle context updates
+    window.electron.onContextUpdate((data) => {
+      console.log('[DEBUG] Context update:', data);
+      if (data.summary) {
+        contextContent.textContent = data.summary;
+        addAIMessage(`Context updated: ${data.isFile ? 'File uploaded' : 'Text added'} successfully.`);
+      }
+    });
+    
+    // Handle errors
+    window.electron.onError((data) => {
+      console.error('[ERROR]', data.message);
+      addAIMessage(`Error: ${data.message}`);
+    });
+    
+    // Handle incoming transcript data
+    window.electron.onTranscript((data) => {
+      console.log('[DEBUG] Received transcript:', data);
+      if (data.text && data.text.trim()) {
+        addHumanMessage(data.text);
+      }
+    });
+    
+    // Handle incoming suggestion data
     window.electron.onSuggestion((data) => {
       console.log('[DEBUG] Received suggestion:', data);
-      suggestionElement.textContent = data.text;
+      if (data.text && data.text.trim()) {
+        addAIMessage(data.text);
+      }
+    });
+    
+    // Add a human message to the conversation
+    function addHumanMessage(text) {
+      // Create message container
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message human-message';
+      
+      // Add message text
+      const messageText = document.createElement('div');
+      messageText.textContent = text;
+      messageDiv.appendChild(messageText);
+      
+      // Add to conversation
+      conversationArea.appendChild(messageDiv);
+      
+      // Scroll to the bottom
+      conversationArea.scrollTop = conversationArea.scrollHeight;
+    }
+    
+    // Add an AI message to the conversation
+    function addAIMessage(text) {
+      // Create message container
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message ai-message';
+      
+      // Add message text
+      const messageText = document.createElement('div');
+      messageText.textContent = text;
+      messageDiv.appendChild(messageText);
+      
+      // Add to conversation
+      conversationArea.appendChild(messageDiv);
+      
+      // Scroll to the bottom
+      conversationArea.scrollTop = conversationArea.scrollHeight;
+    }
+    
+    // Update the recording UI based on the current state
+    function updateRecordingUI() {
+      if (isRecording) {
+        startRecordingButton.disabled = true;
+        stopRecordingButton.disabled = false;
+        statusIndicator.classList.add('recording');
+        contextArea.style.display = 'none';
+        toggleContextButton.disabled = true;
+      } else {
+        startRecordingButton.disabled = false;
+        stopRecordingButton.disabled = true;
+        statusIndicator.classList.remove('recording');
+        toggleContextButton.disabled = false;
+      }
+    }
+    
+    // Toggle context area visibility
+    toggleContextButton.addEventListener('click', () => {
+      if (contextArea.style.display === 'none' || !contextArea.style.display) {
+        contextArea.style.display = 'block';
+        toggleContextButton.querySelector('.fas').classList.remove('fa-plus');
+        toggleContextButton.querySelector('.fas').classList.add('fa-minus');
+        toggleContextButton.title = 'Hide Context';
+      } else {
+        contextArea.style.display = 'none';
+        toggleContextButton.querySelector('.fas').classList.remove('fa-minus');
+        toggleContextButton.querySelector('.fas').classList.add('fa-plus');
+        toggleContextButton.title = 'Add Context';
+      }
+    });
+    
+    // Handle file upload button click
+    uploadFileButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+    
+    // Handle file selection
+    fileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        window.electron.setContextFile(file.path);
+      }
+    });
+    
+    // Handle set text context button click
+    setTextContextButton.addEventListener('click', () => {
+      const text = contextText.value.trim();
+      if (text) {
+        window.electron.setContextText(text);
+        contextText.value = '';
+      }
+    });
+    
+    // Handle start recording button click
+    startRecordingButton.addEventListener('click', () => {
+      window.electron.startRecording();
+    });
+    
+    // Handle stop recording button click
+    stopRecordingButton.addEventListener('click', () => {
+      window.electron.stopRecording();
     });
     
     // Handle window controls
@@ -129,6 +519,9 @@
     document.addEventListener('mouseleave', () => {
       window.electron.setIgnoreMouseEvents(true, { forward: true });
     });
+    
+    // Initialize the UI
+    initializeUI();
   </script>
 </body>
 </html>
