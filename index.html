@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Transcription Overlay</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      overflow: hidden;
+      background-color: rgba(0, 0, 0, 0.5);
+      color: white;
+      -webkit-app-region: drag;
+      border-radius: 10px;
+    }
+    
+    .container {
+      padding: 15px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    
+    .transcript-container {
+      margin-bottom: 10px;
+    }
+    
+    .transcript {
+      font-size: 16px;
+      color: #ffffff;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 8px;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    
+    .suggestion-container {
+      margin-top: 5px;
+    }
+    
+    .suggestion {
+      font-size: 16px;
+      color: #ffffff;
+      background-color: rgba(0, 100, 255, 0.7);
+      padding: 10px;
+      border-radius: 8px;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px;
+      -webkit-app-region: no-drag;
+    }
+    
+    button {
+      background-color: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: white;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+    
+    button:hover {
+      background-color: rgba(255, 255, 255, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="transcript-container">
+      <div class="transcript" id="transcript">Waiting for transcription...</div>
+    </div>
+    <div class="suggestion-container">
+      <div class="suggestion" id="suggestion">AI suggestions will appear here...</div>
+    </div>
+    <div class="controls">
+      <button id="minimize">Minimize</button>
+      <button id="close">Close</button>
+    </div>
+  </div>
+
+  <script>
+    // DOM elements
+    const transcriptElement = document.getElementById('transcript');
+    const suggestionElement = document.getElementById('suggestion');
+    const minimizeButton = document.getElementById('minimize');
+    const closeButton = document.getElementById('close');
+    
+    // Handle incoming transcript data using Electron IPC
+    window.electron.onTranscript((data) => {
+      console.log('[DEBUG] Received transcript:', data);
+      transcriptElement.textContent = data.text;
+    });
+    
+    // Handle incoming suggestion data using Electron IPC
+    window.electron.onSuggestion((data) => {
+      console.log('[DEBUG] Received suggestion:', data);
+      suggestionElement.textContent = data.text;
+    });
+    
+    // Handle window controls
+    minimizeButton.addEventListener('click', () => {
+      window.electron.minimize();
+    });
+    
+    closeButton.addEventListener('click', () => {
+      window.electron.close();
+    });
+    
+    // Make window draggable
+    document.addEventListener('mouseenter', () => {
+      window.electron.setIgnoreMouseEvents(false);
+    });
+    
+    document.addEventListener('mouseleave', () => {
+      window.electron.setIgnoreMouseEvents(true, { forward: true });
+    });
+  </script>
+</body>
+</html>

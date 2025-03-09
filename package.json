@@ -1,0 +1,31 @@
+{
+  "name": "test_google_transcribe",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron .",
+    "server": "node server.js",
+    "electron": "electron .",
+    "dev": "concurrently \"npm run server\" \"npm run electron\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/speech": "^6.7.1",
+    "@google/generative-ai": "^0.24.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.7",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
+    "fs": "^0.0.1-security",
+    "google-gax": "^4.4.1",
+    "node-record-lpcm16": "^1.0.1",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
