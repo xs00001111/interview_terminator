@@ -57,6 +57,36 @@ let chatHistory = [];
 // Using IPC for communication with the main process
 console.log('Using IPC for communication with the main process...');
 
+// Recording state
+let isRecording = false;
+let recordingStream = null;
+
+// Listen for messages from the main process
+process.on('message', (message) => {
+  if (message.type === 'start-recording') {
+    if (!isRecording) {
+      console.log(chalk.green('Starting recording...'));
+      startRecording();
+      process.send({ type: 'recording-status', data: { isRecording: true } });
+    }
+  } else if (message.type === 'stop-recording') {
+    if (isRecording) {
+      console.log(chalk.yellow('Stopping recording...'));
+      stopRecording();
+      process.send({ type: 'recording-status', data: { isRecording: false } });
+    }
+  } else if (message.type === 'set-context') {
+    if (!isRecording && message.data) {
+      console.log(chalk.green('Setting new context...'));
+      if (message.data.text) {
+        setTextContext(message.data.text);
+      } else if (message.data.file) {
+        processContextFile(message.data.file);
+      }
+    }
+  }
+});
+
 // Read file content if provided
 let fileContext = "";
 let fileContentPart = null;
@@ -350,15 +380,154 @@ function restartStream() {
 
   startStream();
 }
-// Start recording and send the microphone input to the Speech API
-async function main() {
-  // Generate document summary if file is provided
-  await generateDocumentSummary();
+// Process text context provided by the user
+async function setTextContext(text) {
+  try {
+    // Extract structured content from the text
+    const extractResult = await model.generateContent([
+      `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${text}`
+    ]);
+    extractedContent = extractResult.response.text();
+    
+    // Generate summary for text content
+    const result = await model.generateContent([
+      `Summarize this document in 3-5 sentences:\n\n${text}`
+    ]);
+    documentSummary = result.response.text();
+    
+    // Use the extracted content
+    fileContext = extractedContent;
+    fileContentPart = null;
+    
+    // Display the summary and extracted content
+    console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
+    console.log(chalk.cyan(documentSummary));
+    console.log(chalk.cyan('============================\n'));
+    
+    console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
+    console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
+    console.log(chalk.yellow('==============================\n'));
+    
+    // Initialize chat with the new context
+    await initializeChat();
+    
+    // Send the summary to the frontend
+    process.send({ 
+      type: 'context-update', 
+      data: { 
+        summary: documentSummary,
+        isFile: false
+      } 
+    });
+    
+  } catch (error) {
+    console.error(chalk.red(`Error processing text: ${error.message}`));
+    process.send({ type: 'error', data: { message: `Error processing text: ${error.message}` } });
+  }
+}
+
+// Process a context file uploaded by the user
+async function processContextFile(filePath) {
+  try {
+    const fileExtension = filePath.split('.').pop().toLowerCase();
+    
+    // Determine MIME type based on file extension
+    let mimeType = 'text/plain';
+    if (['pdf'].includes(fileExtension)) {
+      mimeType = 'application/pdf';
+    } else if (['png', 'jpg', 'jpeg', 'gif'].includes(fileExtension)) {
+      mimeType = `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`;
+    } else if (['docx'].includes(fileExtension)) {
+      mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    
+    // For text files, read as UTF-8
+    if (mimeType === 'text/plain') {
+      const rawFileContent = fs.readFileSync(filePath, 'utf8');
+      console.log(chalk.green(`Loaded text context file: ${filePath}`));
+      
+      // Extract structured content from the document
+      const extractResult = await model.generateContent([
+        `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${rawFileContent}`
+      ]);
+      extractedContent = extractResult.response.text();
+      
+      // Generate summary for text content
+      const result = await model.generateContent([
+        `Summarize this document in 3-5 sentences:\n\n${rawFileContent}`
+      ]);
+      documentSummary = result.response.text();
+      
+      // Use the extracted content instead of raw file content
+      fileContext = extractedContent;
+      fileContentPart = null;
+    } 
+    // For binary files, read as base64 for Gemini multimodal input
+    else {
+      const fileBuffer = fs.readFileSync(filePath);
+      const base64Data = fileBuffer.toString('base64');
+      fileContentPart = {
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType
+        }
+      };
+      console.log(chalk.green(`Loaded binary context file: ${filePath} as ${mimeType}`));
+      
+      // Extract structured content from the document
+      const extractResult = await model.generateContent([
+        fileContentPart,
+        'Read this document and extract the key information in a structured format that can be used as context for a conversation'
+      ]);
+      extractedContent = extractResult.response.text();
+      
+      // Generate summary for binary content
+      const result = await model.generateContent([
+        fileContentPart,
+        'Summarize this document in 3-5 sentences'
+      ]);
+      documentSummary = result.response.text();
+    }
+    
+    // Display the summary and extracted content
+    console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
+    console.log(chalk.cyan(documentSummary));
+    console.log(chalk.cyan('============================\n'));
+    
+    console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
+    console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
+    console.log(chalk.yellow('==============================\n'));
+    
+    // Initialize chat with the new context
+    await initializeChat();
+    
+    // Send the summary to the frontend
+    process.send({ 
+      type: 'context-update', 
+      data: { 
+        summary: documentSummary,
+        isFile: true,
+        fileName: filePath.split('/').pop()
+      } 
+    });
+    
+  } catch (error) {
+    console.error(chalk.red(`Error processing file: ${error.message}`));
+    process.send({ type: 'error', data: { message: `Error processing file: ${error.message}` } });
+  }
+}
+
+// Start the recording and speech recognition
+function startRecording() {
+  if (isRecording) return;
   
-  // Initialize chat with the document context
-  await initializeChat();
+  isRecording = true;
+  audioInput = [];
+  lastAudioInput = [];
+  restartCounter = 0;
   
-  recorder
+  // Start the recording
+  recordingStream = recorder
     .record({
       sampleRateHertz: sampleRateHertz,
       threshold: 0, // Silence threshold
@@ -369,16 +538,60 @@ async function main() {
     .stream()
     .on('error', err => {
       console.error('Audio recording error ' + err);
-    })
-    .pipe(audioInputStreamTransform);
-
-  console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
-  console.log('Listening, press Ctrl+C to stop.');
+      process.send({ type: 'error', data: { message: `Audio recording error: ${err.message}` } });
+      isRecording = false;
+    });
+  
+  // Pipe the recording stream to the audio input stream transform
+  recordingStream.pipe(audioInputStreamTransform);
+  
+  console.log(chalk.cyan('\n===== RECORDING STARTED ====='));
+  console.log('Listening, press Stop to end recording.');
   console.log('');
   console.log('End (ms)       Transcript Results/Status');
   console.log('=========================================================');
-
+  
+  // Start the speech recognition stream
   startStream();
+}
+
+// Stop the recording and speech recognition
+function stopRecording() {
+  if (!isRecording) return;
+  
+  isRecording = false;
+  
+  // Stop the recording stream
+  if (recordingStream) {
+    recordingStream.unpipe(audioInputStreamTransform);
+    recordingStream.destroy();
+    recordingStream = null;
+  }
+  
+  // Stop the speech recognition stream
+  if (recognizeStream) {
+    recognizeStream.end();
+    recognizeStream.removeListener('data', speechCallback);
+    recognizeStream = null;
+  }
+  
+  console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
+}
+
+// Start recording and send the microphone input to the Speech API
+async function main() {
+  // Generate document summary if file is provided
+  await generateDocumentSummary();
+  
+  // Initialize chat with the document context
+  await initializeChat();
+  
+  // Don't automatically start recording
+  console.log(chalk.cyan('\n===== READY ====='));
+  console.log('Click Start to begin recording.');
+  
+  // Notify the frontend that we're ready
+  process.send({ type: 'ready', data: { isReady: true } });
 }
 
 // Run the main function
@@ -389,6 +602,10 @@ main().catch(error => {
 
 // Handle process termination
 process.on('SIGINT', () => {
+  // Stop recording if it's running
+  if (isRecording) {
+    stopRecording();
+  }
   console.log('Closing connections and exiting...');
   process.exit(0);
 });
