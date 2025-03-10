@@ -690,11 +690,15 @@
     
     // Make window draggable
     document.addEventListener('mouseenter', () => {
-      window.electron.setIgnoreMouseEvents(false);
+      if (!isDragging) {
+        window.electron.setIgnoreMouseEvents(false);
+      }
     });
     
     document.addEventListener('mouseleave', () => {
-      window.electron.setIgnoreMouseEvents(true, { forward: true });
+      if (!isDragging) {
+        window.electron.setIgnoreMouseEvents(true, { forward: true });
+      }
     });
     
     // Initialize the UI
@@ -796,6 +800,9 @@
         return;
       }
       
+      // Prevent default behavior to ensure proper dragging
+      e.preventDefault();
+      
       isDragging = true;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
@@ -809,6 +816,7 @@
       
       if (deltaX !== 0 || deltaY !== 0) {
         window.electron.moveWindow(deltaX, deltaY);
+        // Reset drag start coordinates after moving the window
         dragStartX = e.clientX;
         dragStartY = e.clientY;
       }
