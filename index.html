@@ -182,6 +182,61 @@
       margin-top: 10px;
       width: 100%;
       box-sizing: border-box;
+      position: relative;
+    }
+    
+    .pinned-message {
+      border-left: 3px solid #3cc8ff;
+      background-color: rgba(90, 90, 90, 0.8);
+    }
+    
+    .pin-button {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.5);
+      padding: 2px;
+      cursor: pointer;
+      font-size: 12px;
+      min-width: auto;
+      transition: color 0.2s;
+    }
+    
+    .pin-button:hover {
+      color: rgba(255, 255, 255, 0.9);
+      background: transparent;
+    }
+    
+    .pin-button.pinned {
+      color: #3cc8ff;
+    }
+    
+    /* Indentation formatting for structured content */
+    .formatted-content {
+      white-space: pre-wrap;
+    }
+    
+    .formatted-content ul, 
+    .formatted-content ol {
+      padding-left: 20px;
+      margin: 5px 0;
+    }
+    
+    .formatted-content code {
+      background-color: rgba(30, 30, 30, 0.7);
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+    
+    .formatted-content pre {
+      background-color: rgba(30, 30, 30, 0.7);
+      padding: 8px;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin: 5px 0;
     }
     
     .message-label {
@@ -573,15 +628,23 @@
     
     // Add a human message to the conversation
     function addHumanMessage(text) {
-      // Clear previous messages
-      while (conversationArea.firstChild) {
-        conversationArea.removeChild(conversationArea.firstChild);
-      }
+      // Keep pinned messages, remove others
+      const pinnedMessages = Array.from(conversationArea.querySelectorAll('.pinned-message'));
+      const nonPinnedMessages = Array.from(conversationArea.querySelectorAll('.message:not(.pinned-message):not(.welcome-message)'));
+      
+      // Remove non-pinned human messages only, preserve AI messages
+      nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
       
       // Create message container
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message human-message';
       
+      // Add message label
+      const messageLabel = document.createElement('div');
+      messageLabel.className = 'message-label';
+      messageLabel.textContent = 'You';
+      messageDiv.appendChild(messageLabel);
+      
       // Add message text
       const messageText = document.createElement('div');
       messageText.textContent = text;
@@ -590,30 +653,87 @@
       // Add to conversation
       conversationArea.appendChild(messageDiv);
       
-      // Scroll to the bottom
-      conversationArea.scrollTop = conversationArea.scrollHeight;
+      // Scroll to the bottom if no messages are pinned
+      if (pinnedMessages.length === 0) {
+        conversationArea.scrollTop = conversationArea.scrollHeight;
+      } else {
+        // Otherwise scroll to the new message
+        messageDiv.scrollIntoView({ behavior: 'smooth' });
+      }
     }
     
     // Add an AI message to the conversation
     function addAIMessage(text) {
-      // Remove any existing AI messages
-      const aiMessages = conversationArea.querySelectorAll('.welcome-message');
+      // Remove any existing AI messages that are not pinned
+      const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
       aiMessages.forEach(msg => conversationArea.removeChild(msg));
       
       // Create message container
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message welcome-message';
+      messageDiv.setAttribute('data-last-ai', 'true'); // Mark as the last AI message
       
-      // Add message text
+      // Add message label
+      const messageLabel = document.createElement('div');
+      messageLabel.className = 'message-label';
+      messageLabel.textContent = 'AI';
+      messageDiv.appendChild(messageLabel);
+      
+      // Add message text with formatting
       const messageText = document.createElement('div');
-      messageText.textContent = text;
+      messageText.className = 'formatted-content';
+      
+      // Format the text for structured content
+      const formattedText = formatStructuredContent(text);
+      messageText.innerHTML = formattedText;
+      
       messageDiv.appendChild(messageText);
+      
+      // Add pin button
+      const pinButton = document.createElement('button');
+      pinButton.className = 'pin-button';
+      pinButton.innerHTML = '<i class="fas fa-thumbtack"></i>';
+      pinButton.title = 'Pin this message';
+      
+      // Add pin functionality
+      pinButton.addEventListener('click', function() {
+        const isPinned = messageDiv.classList.toggle('pinned-message');
+        pinButton.classList.toggle('pinned', isPinned);
+        pinButton.title = isPinned ? 'Unpin this message' : 'Pin this message';
+        
+        // Scroll behavior based on pin status
+        if (!isPinned) {
+          // If unpinned, scroll to show the message
+          messageDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
+      
+      messageDiv.appendChild(pinButton);
       
       // Add to conversation
       conversationArea.appendChild(messageDiv);
       
-      // Scroll to the bottom
-      conversationArea.scrollTop = conversationArea.scrollHeight;
+      // Scroll to the bottom if no messages are pinned
+      if (!document.querySelector('.pinned-message')) {
+        conversationArea.scrollTop = conversationArea.scrollHeight;
+      }
+    }
+    
+    // Format text to handle structured content like lists and code blocks
+    function formatStructuredContent(text) {
+      // Replace line breaks with <br> tags
+      let formatted = text.replace(/\n/g, '<br>');
+      
+      // Format bullet lists
+      formatted = formatted.replace(/- ([^\n<]+)/g, '• $1');
+      
+      // Format numbered lists
+      formatted = formatted.replace(/(\d+)\. ([^\n<]+)/g, '$1. $2');
+      
+      // Format code blocks (simple implementation)
+      formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+      
+      return formatted;
     }
     
     // Update the recording UI based on the current state
@@ -629,6 +749,13 @@
         stopRecordingButton.disabled = true;
         statusIndicator.classList.remove('recording');
         toggleContextButton.disabled = false;
+        
+        // Preserve the last AI message when recording stops
+        const lastAIMessage = conversationArea.querySelector('.welcome-message[data-last-ai="true"]');
+        if (lastAIMessage) {
+          // Ensure the last AI message remains visible
+          lastAIMessage.scrollIntoView({ behavior: 'smooth' });
+        }
       }
     }
     
