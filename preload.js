@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.send('set-ignore-mouse-events', ignore, options);
   },
   
+  // Window resize and movement
+  resizeWindow: (width, height) => ipcRenderer.send('resize-window', width, height),
+  moveWindow: (x, y) => ipcRenderer.send('move-window', x, y),
+  
   // Recording controls
   startRecording: () => ipcRenderer.send('start-recording'),
   stopRecording: () => ipcRenderer.send('stop-recording'),
@@ -24,5 +28,13 @@ contextBridge.exposeInMainWorld('electron', {
   onRecordingStatus: (callback) => ipcRenderer.on('recording-status', (_, data) => callback(data)),
   onContextUpdate: (callback) => ipcRenderer.on('context-update', (_, data) => callback(data)),
   onError: (callback) => ipcRenderer.on('error', (_, data) => callback(data)),
-  onReady: (callback) => ipcRenderer.on('ready', (_, data) => callback(data))
+  onReady: (callback) => ipcRenderer.on('ready', (_, data) => callback(data)),
+  
+  // Window size and position
+  getCurrentWindowSize: () => {
+    return ipcRenderer.invoke('get-window-size');
+  },
+  getCurrentWindowPosition: () => {
+    return ipcRenderer.invoke('get-window-position');
+  }
 });

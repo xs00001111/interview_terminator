@@ -14,6 +14,7 @@
       color: white;
       -webkit-app-region: drag;
       border-radius: 10px;
+      position: relative; /* Added for resize handles positioning */
     }
     
     .container {
@@ -24,6 +25,7 @@
       justify-content: flex-start;
       padding: 10px;
       overflow-y: auto;
+      position: relative; /* Added for resize handles */
     }
     
     .header {
@@ -351,10 +353,44 @@
       top: 11px;
       left: 5px;
     }
+    
+    /* Resize handles */
+    .resize-handle {
+      position: absolute;
+      -webkit-app-region: no-drag;
+      z-index: 100;
+    }
+    
+    .resize-handle-e {
+      cursor: e-resize;
+      width: 5px;
+      height: calc(100% - 10px);
+      right: 0;
+      top: 5px;
+    }
+    
+    .resize-handle-s {
+      cursor: s-resize;
+      height: 5px;
+      width: calc(100% - 10px);
+      bottom: 0;
+      left: 5px;
+    }
+    
+    .resize-handle-se {
+      cursor: se-resize;
+      width: 10px;
+      height: 10px;
+      bottom: 0;
+      right: 0;
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <div class="resize-handle resize-handle-e" id="resize-e"></div>
+    <div class="resize-handle resize-handle-s" id="resize-s"></div>
+    <div class="resize-handle resize-handle-se" id="resize-se"></div>
     <div class="header">
       <div class="header-top">
         <div class="title">
@@ -663,6 +699,124 @@
     
     // Initialize the UI
     initializeUI();
+    
+    // Setup resize handlers
+    const resizeHandleE = document.getElementById('resize-e');
+    const resizeHandleS = document.getElementById('resize-s');
+    const resizeHandleSE = document.getElementById('resize-se');
+    
+    // Variables to track resize state
+    let isResizing = false;
+    let resizeType = null;
+    let initialWidth = 0;
+    let initialHeight = 0;
+    let initialX = 0;
+    let initialY = 0;
+    
+    // Get initial window size
+    window.electron.getCurrentWindowSize().then(([width, height]) => {
+      initialWidth = width;
+      initialHeight = height;
+    });
+    
+    // East resize (right edge)
+    resizeHandleE.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      resizeType = 'e';
+      initialX = e.clientX;
+      window.electron.getCurrentWindowSize().then(([width, height]) => {
+        initialWidth = width;
+        initialHeight = height;
+      });
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    
+    // South resize (bottom edge)
+    resizeHandleS.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      resizeType = 's';
+      initialY = e.clientY;
+      window.electron.getCurrentWindowSize().then(([width, height]) => {
+        initialWidth = width;
+        initialHeight = height;
+      });
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    
+    // Southeast resize (bottom-right corner)
+    resizeHandleSE.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      resizeType = 'se';
+      initialX = e.clientX;
+      initialY = e.clientY;
+      window.electron.getCurrentWindowSize().then(([width, height]) => {
+        initialWidth = width;
+        initialHeight = height;
+      });
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    
+    // Handle mouse move for resizing
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      
+      let newWidth = initialWidth;
+      let newHeight = initialHeight;
+      
+      if (resizeType === 'e' || resizeType === 'se') {
+        const deltaX = e.clientX - initialX;
+        newWidth = Math.max(400, initialWidth + deltaX); // Minimum width of 400px
+      }
+      
+      if (resizeType === 's' || resizeType === 'se') {
+        const deltaY = e.clientY - initialY;
+        newHeight = Math.max(200, initialHeight + deltaY); // Minimum height of 200px
+      }
+      
+      window.electron.resizeWindow(newWidth, newHeight);
+    });
+    
+    // Handle mouse up to stop resizing
+    document.addEventListener('mouseup', () => {
+      isResizing = false;
+      resizeType = null;
+    });
+    
+    // Handle window dragging with mouse
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    
+    document.addEventListener('mousedown', (e) => {
+      // Only start dragging if clicking on a draggable area (not a control or resize handle)
+      if (e.target.closest('.controls, .window-controls, .resize-handle, button, input')) {
+        return;
+      }
+      
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      
+      const deltaX = e.clientX - dragStartX;
+      const deltaY = e.clientY - dragStartY;
+      
+      if (deltaX !== 0 || deltaY !== 0) {
+        window.electron.moveWindow(deltaX, deltaY);
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+      }
+    });
+    
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
   </script>
 </body>
 </html>

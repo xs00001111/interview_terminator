@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const { fork } = require('child_process');
 
@@ -21,6 +21,7 @@ function createWindow() {
     frame: false, // No window frame
     transparent: true, // Transparent background
     alwaysOnTop: true, // Always on top of other windows
+    resizable: true, // Allow window to be resized
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -40,8 +41,39 @@ function createWindow() {
   });
 
   // Allow window to be draggable
-  ipcMain.on('set-ignore-mouse-events', (event, ignore) => {
-    mainWindow.setIgnoreMouseEvents(ignore, { forward: true });
+  ipcMain.on('set-ignore-mouse-events', (event, ignore, options) => {
+    mainWindow.setIgnoreMouseEvents(ignore, options || { forward: true });
+  });
+  
+  // Handle window resize
+  ipcMain.on('resize-window', (event, width, height) => {
+    if (mainWindow) {
+      mainWindow.setSize(width, height);
+    }
+  });
+  
+  // Handle window move
+  ipcMain.on('move-window', (event, x, y) => {
+    if (mainWindow) {
+      const [currentX, currentY] = mainWindow.getPosition();
+      mainWindow.setPosition(currentX + x, currentY + y);
+    }
+  });
+  
+  // Get window size
+  ipcMain.handle('get-window-size', () => {
+    if (mainWindow) {
+      return mainWindow.getSize();
+    }
+    return [800, 200]; // Default size
+  });
+  
+  // Get window position
+  ipcMain.handle('get-window-position', () => {
+    if (mainWindow) {
+      return mainWindow.getPosition();
+    }
+    return [0, 0]; // Default position
   });
 
   // Handle minimize button click
@@ -86,6 +118,35 @@ function createWindow() {
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
   createWindow();
+  
+  // Register keyboard shortcuts for window movement
+  globalShortcut.register('CommandOrControl+Up', () => {
+    if (mainWindow) {
+      const [x, y] = mainWindow.getPosition();
+      mainWindow.setPosition(x, y - 10);
+    }
+  });
+  
+  globalShortcut.register('CommandOrControl+Down', () => {
+    if (mainWindow) {
+      const [x, y] = mainWindow.getPosition();
+      mainWindow.setPosition(x, y + 10);
+    }
+  });
+  
+  globalShortcut.register('CommandOrControl+Left', () => {
+    if (mainWindow) {
+      const [x, y] = mainWindow.getPosition();
+      mainWindow.setPosition(x - 10, y);
+    }
+  });
+  
+  globalShortcut.register('CommandOrControl+Right', () => {
+    if (mainWindow) {
+      const [x, y] = mainWindow.getPosition();
+      mainWindow.setPosition(x + 10, y);
+    }
+  });
   
   // Start the server process
   serverProcess = fork(path.join(__dirname, 'server.js'), [], {
@@ -134,6 +195,9 @@ app.on('quit', () => {
   if (serverProcess) {
     serverProcess.kill();
   }
+  
+  // Unregister all shortcuts
+  globalShortcut.unregisterAll();
 });
 
 // Quit when all windows are closed, except on macOS

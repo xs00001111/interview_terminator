@@ -179,8 +179,8 @@ async function initializeChat() {
     systemInstruction: {
       role: "system",
       parts: fileContentPart ? 
-        [fileContentPart, { text: `Provide ultra-concise real-time speaking suggestions (1-2 sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. Use the provided document as context for your suggestions.` }] :
-        [{ text: `Provide ultra-concise real-time speaking suggestions (1-2 sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. ${fileContext ? "Use the following extracted document content as context for your suggestions:\n\n" + fileContext : ""}` }]
+        [fileContentPart, { text: `Provide ultra-concise real-time speaking suggestions (maximum two sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. Use the provided document as context for your suggestions.` }] :
+        [{ text: `Provide ultra-concise real-time speaking suggestions (maximum two sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. ${fileContext ? "Use the following extracted document content as context for your suggestions:\n\n" + fileContext : ""}` }]
     }
   });
 }
@@ -537,8 +537,10 @@ function startRecording() {
     })
     .stream()
     .on('error', err => {
-      console.error('Audio recording error ' + err);
-      process.send({ type: 'error', data: { message: `Audio recording error: ${err.message}` } });
+      console.error('Audio recording error:', err);
+      // Ensure we always have a valid error message to send to the frontend
+      const errorMessage = err && err.message ? err.message : 'Unknown recording error';
+      process.send({ type: 'error', data: { message: `Audio recording error: ${errorMessage}` } });
       isRecording = false;
     });
   
@@ -561,21 +563,28 @@ function stopRecording() {
   
   isRecording = false;
   
-  // Stop the recording stream
-  if (recordingStream) {
-    recordingStream.unpipe(audioInputStreamTransform);
-    recordingStream.destroy();
-    recordingStream = null;
+  try {
+    // Stop the recording stream
+    if (recordingStream) {
+      recordingStream.unpipe(audioInputStreamTransform);
+      recordingStream.destroy();
+      recordingStream = null;
+    }
+    
+    // Stop the speech recognition stream
+    if (recognizeStream) {
+      recognizeStream.end();
+      recognizeStream.removeListener('data', speechCallback);
+      recognizeStream = null;
+    }
+    
+    console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
+  } catch (error) {
+    // Handle any errors that occur during stopping
+    const errorMessage = error && error.message ? error.message : 'Unknown error stopping recording';
+    console.error(chalk.red(`Error stopping recording: ${errorMessage}`));
+    process.send({ type: 'error', data: { message: `Error stopping recording: ${errorMessage}` } });
   }
-  
-  // Stop the speech recognition stream
-  if (recognizeStream) {
-    recognizeStream.end();
-    recognizeStream.removeListener('data', speechCallback);
-    recognizeStream = null;
-  }
-  
-  console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
 }
 
 // Start recording and send the microphone input to the Speech API
