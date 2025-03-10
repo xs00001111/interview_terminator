@@ -20,7 +20,13 @@ contextBridge.exposeInMainWorld('electron', {
   
   // Context setting
   setContextText: (text) => ipcRenderer.send('set-context-text', text),
-  setContextFile: (filePath) => ipcRenderer.send('set-context-file', filePath),
+  setContextFile: (filePath) => {
+    console.log('Setting context file:', filePath);
+    ipcRenderer.send('set-context-file', filePath);
+  },
+  
+  // File dialog
+  openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
   
   // Event listeners
   onTranscript: (callback) => ipcRenderer.on('transcript', (_, data) => callback(data)),

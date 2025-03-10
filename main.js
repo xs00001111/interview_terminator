@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const { fork } = require('child_process');
 
@@ -107,8 +107,35 @@ function createWindow() {
     }
   });
   
+  // Handle file dialog open request
+  ipcMain.handle('open-file-dialog', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [
+        { name: 'All Files', extensions: ['*'] },
+        { name: 'Text Files', extensions: ['txt', 'md', 'json'] },
+        { name: 'Documents', extensions: ['pdf', 'docx'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif'] }
+      ]
+    });
+    return result;
+  });
+  
   // Handle set context from file
   ipcMain.on('set-context-file', (event, filePath) => {
+    console.log('Received file path in main process:', filePath);
+    
+    // If the file path is just a filename (not a full path), we need to handle it differently
+    if (!filePath.includes('/') && !filePath.includes('\\')) {
+      console.log('File path appears to be just a filename, not a full path');
+      // In a real implementation, you might want to show a dialog to select the file
+      // For now, we'll just send an error back to the renderer
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: 'Could not access full file path. Please try again.' });
+      }
+      return;
+    }
+    
     if (serverProcess) {
       serverProcess.send({ type: 'set-context', data: { file: filePath } });
     }

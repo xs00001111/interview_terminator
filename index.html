@@ -776,14 +776,37 @@
     
     // Handle file upload button click
     uploadFileButton.addEventListener('click', () => {
-      fileInput.click();
+      // Use Electron's dialog API to select files
+      window.electron.getCurrentWindowSize().then(() => {
+        window.electron.openFileDialog().then(result => {
+          if (!result.canceled && result.filePaths.length > 0) {
+            const filePath = result.filePaths[0];
+            window.electron.setContextFile(filePath);
+          }
+        }).catch(err => {
+          console.error('Error selecting file:', err);
+        });
+      });
     });
     
     // Handle file selection
     fileInput.addEventListener('change', (event) => {
       const file = event.target.files[0];
       if (file) {
-        window.electron.setContextFile(file.path);
+        // In Electron's renderer process, the path property is not directly accessible
+        // We need to use the file object itself
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          // For demonstration, we'll just use the file name
+          // The actual file content is in e.target.result
+          const fileName = file.name;
+          console.log(`Selected file: ${fileName}`);
+          
+          // Pass the file path to the main process
+          // In Electron, we need to use a different approach to get the full path
+          window.electron.setContextFile(file.path || file.name);
+        };
+        reader.readAsDataURL(file);
       }
     });
     
