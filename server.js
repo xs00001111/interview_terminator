@@ -174,26 +174,61 @@ async function generateDocumentSummary() {
 
 // Initialize chat after summary generation
 async function initializeChat() {
-  chat = model.startChat({
+  // Create chat configuration with system instruction as text only
+  const chatConfig = {
     history: chatHistory,
     systemInstruction: {
       role: "system",
-      parts: fileContentPart ? 
-        [fileContentPart, { text: `Provide ultra-concise real-time speaking suggestions (maximum two sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. Use the provided document as context for your suggestions.` }] :
-        [{ text: `Provide ultra-concise real-time speaking suggestions (maximum two sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. ${fileContext ? "Use the following extracted document content as context for your suggestions:\n\n" + fileContext : ""}` }]
+      parts: [{ 
+        text: `You are an INTERVIEW COACH assisting an interviewee during a job interview. Provide EXTREMELY CONCISE real-time speaking suggestions (ONE SHORT SENTENCE ONLY, MAXIMUM 15 WORDS) IN THE INTERVIEWEE'S VOICE - not as a coach or AI assistant. Focus on professional, confident responses that highlight qualifications and experiences. STRICT BREVITY IS REQUIRED - responses must be short enough to read at a glance. ${fileContext ? "Use the extracted document content as context for crafting appropriate interview responses." : ""}` 
+      }]
     }
-  });
+  };
+
+  // If we have a binary file content, add it to the history instead of system instruction
+  if (fileContentPart) {
+    chatConfig.history = [
+      {
+        role: "user",
+        parts: [fileContentPart, { text: "Use this document as context for our conversation." }]
+      },
+      {
+        role: "model",
+        parts: [{ text: "I'll use this document as context for our conversation." }]
+      }
+    ];
+  } else if (fileContext) {
+    // If we have text context, add it to the history
+    chatConfig.history = [
+      {
+        role: "user",
+        parts: [{ text: `Here's the document content to use as context:\n\n${fileContext}` }]
+      },
+      {
+        role: "model",
+        parts: [{ text: "I'll use this document content as context for our conversation." }]
+      }
+    ];
+  }
+
+  // Initialize the chat with the configuration
+  chat = model.startChat(chatConfig);
 }
 
+// Initialize chat with default configuration
+// Will be properly initialized when context is loaded or by initializeChat()
 let chat = model.startChat({
-  history: chatHistory,
+  history: [],
   systemInstruction: {
     role: "system",
-    parts: fileContentPart ? 
-      [fileContentPart, { text: `Provide ultra-concise real-time speaking suggestions (1-2 sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. Use the provided document as context for your suggestions.` }] :
-      [{ text: `Provide ultra-concise real-time speaking suggestions (1-2 sentences). Focus on active listening cues and situational context. Prioritize brevity, relevance, and natural flow from previous exchanges. ${fileContext ? "Use the following extracted document content as context for your suggestions:\n\n" + fileContext : ""}` }]
+    parts: [{ 
+      text: "You are an INTERVIEW COACH assisting an interviewee during a job interview. Provide EXTREMELY CONCISE real-time speaking suggestions (ONE SHORT SENTENCE ONLY, MAXIMUM 15 WORDS) IN THE INTERVIEWEE'S VOICE - not as a coach or AI assistant. Focus on professional, confident responses that highlight qualifications and experiences. STRICT BREVITY IS REQUIRED - responses must be short enough to read at a glance."
+    }]
   }
 });
+
+// Initialize chat properly after startup
+initializeChat();
 
 const config = {
   encoding: encoding,
