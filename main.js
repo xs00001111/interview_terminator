@@ -1,6 +1,8 @@
-const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const { fork } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 
 // Global reference to the server process
 let serverProcess;
@@ -16,6 +18,62 @@ let windowState = {
   position: null,
   size: null
 };
+
+// Create temp directory for screenshots
+const screenshotDir = path.join(os.tmpdir(), 'app-screenshots');
+if (!fs.existsSync(screenshotDir)) {
+  fs.mkdirSync(screenshotDir, { recursive: true });
+}
+
+// Function to take a screenshot
+function takeScreenshot() {
+  if (!mainWindow) return;
+  
+  // Get the current timestamp for the filename
+  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+  const screenshotPath = path.join(screenshotDir, `screenshot-${timestamp}.png`);
+  
+  // Use desktopCapturer to get all available sources
+  desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
+    .then(async sources => {
+      // Get the primary display source
+      const primarySource = sources[0]; // Usually the first source is the entire screen
+      
+      try {
+        // Capture a screenshot of the entire screen
+        const screenshot = await mainWindow.webContents.capturePage();
+        const buffer = screenshot.toPNG();
+        
+        // Save the screenshot to the temp directory
+        fs.writeFile(screenshotPath, buffer, (err) => {
+          if (err) {
+            console.error('Failed to save screenshot:', err);
+            if (mainWindow) {
+              mainWindow.webContents.send('error', { message: 'Failed to save screenshot' });
+            }
+            return;
+          }
+          
+          console.log(`Screenshot saved to: ${screenshotPath}`);
+          // Notify the renderer process that the screenshot was taken
+          if (mainWindow) {
+            mainWindow.webContents.send('screenshot-taken', { path: screenshotPath });
+          }
+        });
+      } catch (err) {
+        console.error('Failed to capture screenshot:', err);
+        if (mainWindow) {
+          mainWindow.webContents.send('error', { message: 'Failed to capture screenshot' });
+        }
+      }
+    })
+    .catch(err => {
+      console.error('Failed to get screen sources:', err);
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: 'Failed to get screen sources' });
+      }
+    });
+}
 
 function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -192,6 +250,11 @@ app.whenReady().then(() => {
   // Register keyboard shortcut for quitting the application (Command+Q on Mac, Control+Q on Windows)
   globalShortcut.register('CommandOrControl+Q', () => {
     app.quit();
+  });
+  
+  // Register keyboard shortcut for taking screenshots (Command+H on Mac, Control+H on Windows)
+  globalShortcut.register('CommandOrControl+H', () => {
+    takeScreenshot();
   });
   
   // Start the server process

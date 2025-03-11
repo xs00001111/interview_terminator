@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electron', {
   onContextUpdate: (callback) => ipcRenderer.on('context-update', (_, data) => callback(data)),
   onError: (callback) => ipcRenderer.on('error', (_, data) => callback(data)),
   onReady: (callback) => ipcRenderer.on('ready', (_, data) => callback(data)),
+  onScreenshotTaken: (callback) => ipcRenderer.on('screenshot-taken', (_, data) => callback(data)),
   
   // Window size and position
   getCurrentWindowSize: () => {

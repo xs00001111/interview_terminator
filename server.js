@@ -2,7 +2,7 @@
 const encoding = 'LINEAR16';
 const sampleRateHertz = 16000;
 const languageCode = 'en-US';
-const streamingLimit = 20000; // ms - set to low number for demo purposes
+const streamingLimit = 15000; 
 
 const chalk = require('chalk');
 const {Writable} = require('stream');

@@ -17,6 +17,26 @@
       position: relative; /* Added for resize handles positioning */
     }
     
+    .screenshot-tip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 12px;
+      margin-left: 8px;
+      cursor: help;
+      -webkit-app-region: no-drag;
+      transition: all 0.2s ease;
+    }
+    
+    .screenshot-tip:hover {
+      color: rgba(255, 255, 255, 0.9);
+    }
+    
+    .screenshot-tip .fas {
+      font-size: 12px;
+    }
+    
     .container {
       min-height: 200px;
       max-height: 80vh;
@@ -480,8 +500,8 @@
         <div class="controls">
           <div class="recording-controls">
             <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
-            <button id="start-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
-            <button id="stop-recording" disabled title="Stop Recording"><i class="fas fa-stop"></i></button>
+            <button id="toggle-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
+            <button id="take-screenshot" title="Take Screenshot (Command+H on Mac / Control+H on Windows)"><i class="fas fa-camera"></i></button>
           </div>
         </div>
       </div>
@@ -502,8 +522,8 @@
   <script>
     // DOM elements
     const conversationArea = document.getElementById('conversation-area');
-    const startRecordingButton = document.getElementById('start-recording');
-    const stopRecordingButton = document.getElementById('stop-recording');
+    const toggleRecordingButton = document.getElementById('toggle-recording');
+    const takeScreenshotButton = document.getElementById('take-screenshot');
     const minimizeButton = document.getElementById('minimize');
     const closeButton = document.getElementById('close');
     const statusIndicator = document.getElementById('status-indicator');
@@ -805,14 +825,14 @@
     // Update the recording UI based on the current state
     function updateRecordingUI() {
       if (isRecording) {
-        startRecordingButton.disabled = true;
-        stopRecordingButton.disabled = false;
+        toggleRecordingButton.innerHTML = '<i class="fas fa-stop"></i>';
+        toggleRecordingButton.title = 'Stop Recording';
         statusIndicator.classList.add('recording');
         contextArea.style.display = 'none';
         toggleContextButton.disabled = true;
       } else {
-        startRecordingButton.disabled = false;
-        stopRecordingButton.disabled = true;
+        toggleRecordingButton.innerHTML = '<i class="fas fa-microphone"></i>';
+        toggleRecordingButton.title = 'Start Recording';
         statusIndicator.classList.remove('recording');
         toggleContextButton.disabled = false;
         
@@ -885,14 +905,21 @@
       }
     });
     
-    // Handle start recording button click
-    startRecordingButton.addEventListener('click', () => {
-      window.electron.startRecording();
+    // Handle toggle recording button click
+    toggleRecordingButton.addEventListener('click', () => {
+      if (isRecording) {
+        window.electron.stopRecording();
+      } else {
+        window.electron.startRecording();
+      }
     });
     
-    // Handle stop recording button click
-    stopRecordingButton.addEventListener('click', () => {
-      window.electron.stopRecording();
+    // Handle screenshot button click
+    takeScreenshotButton.addEventListener('click', () => {
+      // Trigger screenshot using keyboard shortcut simulation or direct API call
+      // This depends on how the screenshot functionality is implemented in the main process
+      // For now, we'll just log a message
+      console.log('Screenshot button clicked');
     });
     
     // Handle window controls
@@ -1040,6 +1067,26 @@
     
     document.addEventListener('mouseup', () => {
       isDragging = false;
+    });
+    
+    // Listen for screenshot taken events
+    window.electron.onScreenshotTaken((data) => {
+      // Create a notification message
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message ai-message';
+      messageDiv.textContent = `Screenshot saved to: ${data.path}`;
+      conversationArea.appendChild(messageDiv);
+      
+      // Auto-scroll to the bottom
+      conversationArea.scrollTop = conversationArea.scrollHeight;
+      
+      // Remove the notification after 5 seconds
+      setTimeout(() => {
+        messageDiv.style.opacity = '0';
+        setTimeout(() => {
+          conversationArea.removeChild(messageDiv);
+        }, 500);
+      }, 5000);
     });
   </script>
 </body>
