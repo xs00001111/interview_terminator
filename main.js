@@ -50,6 +50,13 @@ async function takeScreenshot(processAfterCapture = false) {
         ? await captureScreenshotMac() 
         : await captureScreenshotWindows();
     
+    // Handle pin status change
+    ipcMain.on('set-pin-status', (event, pinned) => {
+      if (serverProcess) {
+        serverProcess.send({ type: 'pin-status', data: { pinned } });
+      }
+    });
+    
     // Generate a unique filename using timestamp
     const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
     screenshotPath = path.join(screenshotDir, `screenshot-${timestamp}.png`);

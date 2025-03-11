@@ -54,7 +54,7 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
-const GEMINI_DEBOUNCE_DELAY = 8000; // 15 seconds in milliseconds
+const GEMINI_DEBOUNCE_DELAY = 6000; // 6 seconds in milliseconds
 
 // Using IPC for communication with the main process
 console.log('Using IPC for communication with the main process...');
@@ -132,6 +132,12 @@ function stopRecording() {
   }
 }
 
+// Add function to handle pin status changes
+function handlePinStatusChange(pinned) {
+  isPinned = pinned;
+  console.log(chalk.cyan(`Message pin status changed: ${pinned ? 'pinned' : 'unpinned'}`));
+}
+
 // Listen for messages from the main process
 process.on('message', (message) => {
   if (message.type === 'start-recording') {
@@ -160,6 +166,8 @@ process.on('message', (message) => {
       console.log(chalk.green('Processing screenshot...'));
       processScreenshot(message.data.path);
     }
+  } else if (message.type === 'pin-status-change') {
+    handlePinStatusChange(message.data.pinned);
   }
 });
 
@@ -862,4 +870,44 @@ Format your response in markdown for better readability.`;
     
     return null;
   }
+}
+
+// Modify the generateGeminiResponse function to respect pin status
+async function generateGeminiResponse(transcript) {
+  if (isPinned) {
+    console.log(chalk.yellow('Skipping AI suggestion - message is pinned'));
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastGeminiGenerationTime < GEMINI_DEBOUNCE_DELAY) {
+    return;
+  }
+  lastGeminiGenerationTime = now;
+  chat.sendMessageStream(userMessage)
+  .then(async (result) => {
+    let fullResponse = '';
+    for await (const chunk of result.stream) {
+      fullResponse += chunk.text();
+      process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
+    }
+    
+    // Send AI suggestion to the Electron frontend via IPC
+    console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
+    process.send({ type: 'suggestion', data: { text: fullResponse } });
+    
+    // Update chat history
+    chat = model.startChat({
+      history: [
+        ...chatHistory
+      ]
+    });
+    chatHistory.push(
+      { role: 'user', parts: [{ text: userMessage }] },
+      { role: 'model', parts: [{ text: fullResponse }] }
+    );
+  }); // Added missing closing bracket
+  
+isFinalEndTime = resultEndTime;
+lastTranscriptWasFinal = true;
 }

@@ -43,5 +43,6 @@ contextBridge.exposeInMainWorld('electron', {
   },
   getCurrentWindowPosition: () => {
     return ipcRenderer.invoke('get-window-position');
-  }
+  },
+  setPinStatus: (pinned) => ipcRenderer.send('set-pin-status', pinned),
 });

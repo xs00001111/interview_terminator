@@ -209,6 +209,41 @@
     
     .welcome-message .formatted-content {
       padding-right: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .pagination-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 8px;
+      padding: 0 5px;
+    }
+    
+    .pagination-button {
+      background-color: rgba(60, 60, 60, 0.7);
+      border: none;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background-color 0.2s;
+    }
+    
+    .pagination-button:hover {
+      background-color: rgba(80, 80, 80, 0.9);
+    }
+    
+    .pagination-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .pagination-info {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.7);
     }
     
     .welcome-message::-webkit-scrollbar {
@@ -801,9 +836,69 @@
       
       // Format the text for structured content
       const formattedText = formatStructuredContent(text);
-      messageText.innerHTML = formattedText;
+      
+      // Pagination setup
+      const charsPerPage = 500; // Approximate characters per page
+      const fullText = formattedText;
+      const totalPages = Math.max(1, Math.ceil(fullText.length / charsPerPage));
+      
+      // Store the full text and pagination info as data attributes
+      messageDiv.setAttribute('data-full-text', fullText);
+      messageDiv.setAttribute('data-current-page', '1');
+      messageDiv.setAttribute('data-total-pages', totalPages);
+      
+      // Set initial content (first page)
+      if (totalPages > 1) {
+        messageText.innerHTML = fullText.substring(0, charsPerPage);
+      } else {
+        messageText.innerHTML = fullText;
+      }
       
       messageDiv.appendChild(messageText);
+      
+      // Add pagination controls if needed
+      if (totalPages > 1) {
+        const paginationControls = document.createElement('div');
+        paginationControls.className = 'pagination-controls';
+        
+        // Previous button
+        const prevButton = document.createElement('button');
+        prevButton.className = 'pagination-button';
+        prevButton.innerHTML = '&larr;';
+        prevButton.disabled = true; // Disabled on first page
+        prevButton.addEventListener('click', function() {
+          const currentPage = parseInt(messageDiv.getAttribute('data-current-page'));
+          if (currentPage > 1) {
+            const newPage = currentPage - 1;
+            messageDiv.setAttribute('data-current-page', newPage);
+            updateMessageContent(messageDiv, newPage);
+          }
+        });
+        
+        // Page info
+        const pageInfo = document.createElement('span');
+        pageInfo.className = 'pagination-info';
+        pageInfo.textContent = `Page 1 of ${totalPages}`;
+        
+        // Next button
+        const nextButton = document.createElement('button');
+        nextButton.className = 'pagination-button';
+        nextButton.innerHTML = '&rarr;';
+        nextButton.addEventListener('click', function() {
+          const currentPage = parseInt(messageDiv.getAttribute('data-current-page'));
+          const totalPages = parseInt(messageDiv.getAttribute('data-total-pages'));
+          if (currentPage < totalPages) {
+            const newPage = currentPage + 1;
+            messageDiv.setAttribute('data-current-page', newPage);
+            updateMessageContent(messageDiv, newPage);
+          }
+        });
+        
+        paginationControls.appendChild(prevButton);
+        paginationControls.appendChild(pageInfo);
+        paginationControls.appendChild(nextButton);
+        messageDiv.appendChild(paginationControls);
+      }
       
       // Add pin button
       const pinButton = document.createElement('button');
@@ -816,6 +911,9 @@
         const isPinned = messageDiv.classList.toggle('pinned-message');
         pinButton.classList.toggle('pinned', isPinned);
         pinButton.title = isPinned ? 'Unpin this message' : 'Pin this message';
+        
+        // Send pin status to server
+        window.electron.setPinStatus(isPinned);
         
         // Scroll behavior based on pin status
         if (!isPinned) {
@@ -831,6 +929,33 @@
       
       // Always scroll to bottom
       container.scrollTop = container.scrollHeight;
+    }
+    
+    // Function to update message content based on pagination
+    function updateMessageContent(messageDiv, page) {
+      const fullText = messageDiv.getAttribute('data-full-text');
+      const totalPages = parseInt(messageDiv.getAttribute('data-total-pages'));
+      const charsPerPage = 500; // Should match the value in addAIMessage
+      
+      const startChar = (page - 1) * charsPerPage;
+      const endChar = Math.min(startChar + charsPerPage, fullText.length);
+      
+      // Update content
+      const contentDiv = messageDiv.querySelector('.formatted-content');
+      contentDiv.innerHTML = fullText.substring(startChar, endChar);
+      
+      // Update pagination info
+      const pageInfo = messageDiv.querySelector('.pagination-info');
+      if (pageInfo) {
+        pageInfo.textContent = `Page ${page} of ${totalPages}`;
+      }
+      
+      // Update button states
+      const prevButton = messageDiv.querySelector('.pagination-button:first-child');
+      const nextButton = messageDiv.querySelector('.pagination-button:last-child');
+      
+      if (prevButton) prevButton.disabled = page <= 1;
+      if (nextButton) nextButton.disabled = page >= totalPages;
     }
     
     // Format text to handle structured content like lists and code blocks
