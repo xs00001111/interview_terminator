@@ -26,53 +26,176 @@ if (!fs.existsSync(screenshotDir)) {
 }
 
 // Function to take a screenshot
-function takeScreenshot() {
+async function takeScreenshot(processAfterCapture = false) {
   if (!mainWindow) return;
   
-  // Get the current timestamp for the filename
-  const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
-  const screenshotPath = path.join(screenshotDir, `screenshot-${timestamp}.png`);
+  let screenshotPath = "";
   
-  // Use desktopCapturer to get all available sources
-  desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
-    .then(async sources => {
-      // Get the primary display source
-      const primarySource = sources[0]; // Usually the first source is the entire screen
-      
-      try {
-        // Capture a screenshot of the entire screen
-        const screenshot = await mainWindow.webContents.capturePage();
-        const buffer = screenshot.toPNG();
-        
-        // Save the screenshot to the temp directory
-        fs.writeFile(screenshotPath, buffer, (err) => {
-          if (err) {
-            console.error('Failed to save screenshot:', err);
-            if (mainWindow) {
-              mainWindow.webContents.send('error', { message: 'Failed to save screenshot' });
-            }
-            return;
-          }
-          
-          console.log(`Screenshot saved to: ${screenshotPath}`);
-          // Notify the renderer process that the screenshot was taken
-          if (mainWindow) {
-            mainWindow.webContents.send('screenshot-taken', { path: screenshotPath });
-          }
-        });
-      } catch (err) {
-        console.error('Failed to capture screenshot:', err);
-        if (mainWindow) {
-          mainWindow.webContents.send('error', { message: 'Failed to capture screenshot' });
+  try {
+    // Hide the app window temporarily to avoid it appearing in the screenshot
+    const wasVisible = mainWindow.isVisible();
+    if (wasVisible) {
+      // Store window position and size
+      windowState.position = mainWindow.getPosition();
+      windowState.size = mainWindow.getSize();
+      mainWindow.hide();
+    }
+    
+    // Small delay to ensure the window is hidden before taking the screenshot
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Get screenshot buffer using native methods based on platform
+    const screenshotBuffer = 
+      process.platform === "darwin" 
+        ? await captureScreenshotMac() 
+        : await captureScreenshotWindows();
+    
+    // Generate a unique filename using timestamp
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+    screenshotPath = path.join(screenshotDir, `screenshot-${timestamp}.png`);
+    
+    // Save the screenshot to the temp directory
+    fs.writeFileSync(screenshotPath, screenshotBuffer);
+    
+    // Verify the file was written correctly
+    const stats = fs.statSync(screenshotPath);
+    if (stats.size === 0) {
+      console.error('Screenshot file was created but is empty');
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: 'Failed to save screenshot: File is empty' });
+      }
+      return;
+    }
+    
+    console.log(`Screenshot saved to: ${screenshotPath} (${stats.size} bytes)`);
+    
+    // Manage screenshot queue (keeping only the most recent screenshots)
+    const MAX_SCREENSHOTS = 10; // Maximum number of screenshots to keep
+    const screenshotFiles = fs.readdirSync(screenshotDir)
+      .filter(file => file.startsWith('screenshot-'))
+      .map(file => path.join(screenshotDir, file));
+    
+    // Sort by creation time (oldest first)
+    screenshotFiles.sort((a, b) => {
+      return fs.statSync(a).mtime.getTime() - fs.statSync(b).mtime.getTime();
+    });
+    
+    // Remove oldest screenshots if we have too many
+    if (screenshotFiles.length > MAX_SCREENSHOTS) {
+      const filesToRemove = screenshotFiles.slice(0, screenshotFiles.length - MAX_SCREENSHOTS);
+      for (const fileToRemove of filesToRemove) {
+        try {
+          fs.unlinkSync(fileToRemove);
+          console.log(`Removed old screenshot: ${fileToRemove}`);
+        } catch (error) {
+          console.error(`Error removing old screenshot: ${error}`);
         }
       }
-    })
-    .catch(err => {
-      console.error('Failed to get screen sources:', err);
+    }
+    
+    // Show the main window again if it was visible before
+    if (wasVisible && mainWindow) {
+      // Small delay before showing window again
+      await new Promise(resolve => setTimeout(resolve, 50));
+      mainWindow.show();
+      if (windowState.position) {
+        mainWindow.setPosition(windowState.position[0], windowState.position[1]);
+      }
+      if (windowState.size) {
+        mainWindow.setSize(windowState.size[0], windowState.size[1]);
+      }
+    }
+    
+    // Notify the renderer process that the screenshot was taken
+    if (mainWindow) {
+      mainWindow.webContents.send('screenshot-taken', { path: screenshotPath });
+    }
+    
+    // If processAfterCapture is true, send the screenshot to the server for processing
+    if (processAfterCapture && serverProcess) {
+      console.log('Sending screenshot to server for processing...');
+      serverProcess.send({ type: 'process-screenshot', data: { path: screenshotPath } });
       if (mainWindow) {
-        mainWindow.webContents.send('error', { message: 'Failed to get screen sources' });
+        mainWindow.webContents.send('processing-screenshot', { message: 'Processing screenshot...' });
+      }
+    }
+    
+    return screenshotPath;
+  } catch (err) {
+    console.error('Failed to capture screenshot:', err);
+    if (mainWindow) {
+      mainWindow.webContents.send('error', { message: `Failed to capture screenshot: ${err.message}` });
+    }
+    throw err;
+  }
+}
+
+// Platform-specific screenshot capture for macOS
+async function captureScreenshotMac() {
+  try {
+    // Create a temporary file path for the screenshot
+    const tempPath = path.join(screenshotDir, `temp-${Date.now()}.png`);
+    
+    // Use the screencapture utility on macOS
+    const { exec } = require('child_process');
+    await new Promise((resolve, reject) => {
+      exec(`screencapture -x ${tempPath}`, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    
+    // Read the file and return as buffer
+    return fs.readFileSync(tempPath);
+  } catch (error) {
+    console.error('Error capturing screenshot on macOS:', error);
+    throw error;
+  }
+}
+
+// Platform-specific screenshot capture for Windows
+async function captureScreenshotWindows() {
+  try {
+    // Use Electron's desktopCapturer for Windows
+    const sources = await desktopCapturer.getSources({ 
+      types: ['screen'], 
+      thumbnailSize: screen.getPrimaryDisplay().workAreaSize 
+    });
+    
+    // Get the primary display source
+    const primarySource = sources[0];
+    
+    // Create a new BrowserWindow to capture the entire screen
+    const captureWindow = new BrowserWindow({
+      width: screen.getPrimaryDisplay().workAreaSize.width,
+      height: screen.getPrimaryDisplay().workAreaSize.height,
+      show: false,
+      frame: false,
+      transparent: true,
+      webPreferences: {
+        offscreen: true
       }
     });
+    
+    // Capture the entire screen
+    const screenshot = await captureWindow.webContents.capturePage({
+      x: 0,
+      y: 0,
+      width: screen.getPrimaryDisplay().bounds.width,
+      height: screen.getPrimaryDisplay().bounds.height
+    });
+    
+    // Close the capture window
+    captureWindow.close();
+    
+    return screenshot.toPNG();
+  } catch (error) {
+    console.error('Error capturing screenshot on Windows:', error);
+    throw error;
+  }
 }
 
 function createWindow() {
@@ -254,7 +377,12 @@ app.whenReady().then(() => {
   
   // Register keyboard shortcut for taking screenshots (Command+H on Mac, Control+H on Windows)
   globalShortcut.register('CommandOrControl+H', () => {
-    takeScreenshot();
+    takeScreenshot(false);
+  });
+  
+  // Register keyboard shortcut for taking and processing screenshots (Command+Enter on Mac, Control+Enter on Windows)
+  globalShortcut.register('CommandOrControl+Enter', () => {
+    takeScreenshot(true);
   });
   
   // Start the server process
@@ -276,6 +404,10 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('error', message.data);
     } else if (message.type === 'ready' && mainWindow) {
       mainWindow.webContents.send('ready', message.data);
+    } else if (message.type === 'screenshot-processed' && mainWindow) {
+      mainWindow.webContents.send('screenshot-processed', message.data);
+    } else if (message.type === 'processing-screenshot' && mainWindow) {
+      mainWindow.webContents.send('processing-screenshot', message.data);
     }
   });
   

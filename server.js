@@ -86,6 +86,11 @@ process.on('message', (message) => {
         processContextFile(message.data.file);
       }
     }
+  } else if (message.type === 'process-screenshot') {
+    if (message.data && message.data.path) {
+      console.log(chalk.green('Processing screenshot...'));
+      processScreenshot(message.data.path);
+    }
   }
 });
 
@@ -617,77 +622,7 @@ async function processContextFile(filePath) {
   }
 }
 
-// Start the recording and speech recognition
-function startRecording() {
-  if (isRecording) return;
-  
-  isRecording = true;
-  audioInput = [];
-  lastAudioInput = [];
-  restartCounter = 0;
-  
-  // Start the recording
-  recordingStream = recorder
-    .record({
-      sampleRateHertz: sampleRateHertz,
-      threshold: 0, // Silence threshold
-      silence: 1000,
-      keepSilence: true,
-      recordProgram: 'rec', // Try also "arecord" or "sox"
-    })
-    .stream()
-    .on('error', err => {
-      console.error('Audio recording error:', err);
-      // Ensure we always have a valid error message to send to the frontend
-      const errorMessage = err && err.message ? err.message : 'Unknown recording error';
-      process.send({ type: 'error', data: { message: `Audio recording error: ${errorMessage}` } });
-      isRecording = false;
-    });
-  
-  // Pipe the recording stream to the audio input stream transform
-  recordingStream.pipe(audioInputStreamTransform);
-  
-  console.log(chalk.cyan('\n===== RECORDING STARTED ====='));
-  console.log('Listening, press Stop to end recording.');
-  console.log('');
-  console.log('End (ms)       Transcript Results/Status');
-  console.log('=========================================================');
-  
-  // Start the speech recognition stream
-  startStream();
-}
-
-// Stop the recording and speech recognition
-function stopRecording() {
-  if (!isRecording) return;
-  
-  isRecording = false;
-  
-  try {
-    // Stop the recording stream
-    if (recordingStream) {
-      recordingStream.unpipe(audioInputStreamTransform);
-      recordingStream.destroy();
-      recordingStream = null;
-    }
-    
-    // Stop the speech recognition stream
-    if (recognizeStream) {
-      recognizeStream.end();
-      recognizeStream.removeListener('data', speechCallback);
-      recognizeStream = null;
-    }
-    
-    console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
-  } catch (error) {
-    // Handle any errors that occur during stopping
-    const errorMessage = error && error.message ? error.message : 'Unknown error stopping recording';
-    console.error(chalk.red(`Error stopping recording: ${errorMessage}`));
-    process.send({ type: 'error', data: { message: `Error stopping recording: ${errorMessage}` } });
-  }
-}
-
-// Start recording and send the microphone input to the Speech API
+// Start the recording and send the microphone input to the Speech API
 async function main() {
   // Generate document summary if file is provided
   await generateDocumentSummary();
@@ -718,3 +653,77 @@ process.on('SIGINT', () => {
   console.log('Closing connections and exiting...');
   process.exit(0);
 });
+
+// Process a screenshot to extract text using Gemini
+async function processScreenshot(screenshotPath) {
+  try {
+    console.log(chalk.cyan('\n===== PROCESSING SCREENSHOT ====='));
+    console.log(`Screenshot path: ${screenshotPath}`);
+    
+    // Read the screenshot file as base64
+    const fileBuffer = fs.readFileSync(screenshotPath);
+    const base64Data = fileBuffer.toString('base64');
+    
+    // Create the image part for Gemini
+    const imagePart = {
+      inlineData: {
+        data: base64Data,
+        mimeType: 'image/png'
+      }
+    };
+    
+    // Extract text from the image using Gemini
+    console.log(chalk.yellow('Extracting text from image using Gemini...'));
+    const extractResult = await model.generateContent([
+      imagePart,
+      'Extract all the text visible in this image. Return only the extracted text without any additional commentary.'
+    ]);
+    
+    const extractedText = extractResult.response.text();
+    
+    // Print the extracted text to the terminal
+    console.log(chalk.green('\n===== EXTRACTED TEXT FROM SCREENSHOT ====='));
+    console.log(extractedText);
+    console.log(chalk.green('==========================================\n'));
+    
+    // Send the extracted text to the frontend
+    process.send({
+      type: 'suggestion',
+      data: {
+        text: `Extracted text from screenshot:\n${extractedText}`
+      }
+    });
+    
+    // Also send a specific screenshot processed event
+    process.send({
+      type: 'screenshot-processed',
+      data: {
+        success: true,
+        text: extractedText
+      }
+    });
+    
+    return extractedText;
+  } catch (error) {
+    console.error(chalk.red(`Error processing screenshot: ${error.message}`));
+    
+    // Send error to the frontend
+    process.send({
+      type: 'error',
+      data: {
+        message: `Error processing screenshot: ${error.message}`
+      }
+    });
+    
+    // Also send a specific screenshot processed event with error
+    process.send({
+      type: 'screenshot-processed',
+      data: {
+        success: false,
+        error: error.message
+      }
+    });
+    
+    return null;
+  }
+}
