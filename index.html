@@ -38,8 +38,8 @@
     }
     
     .container {
-      min-height: 200px;
-      max-height: 80vh;
+      min-height: 400px;
+      max-height: 90vh;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
@@ -169,7 +169,7 @@
     .conversation-area {
       flex-grow: 1;
       height: 100%;
-      min-height: 200px;
+      min-height: 400px;
       margin-bottom: 10px;
       display: flex;
       flex-direction: column;
@@ -838,7 +838,7 @@
       const formattedText = formatStructuredContent(text);
       
       // Pagination setup
-      const charsPerPage = 500; // Approximate characters per page
+      const charsPerPage = 1000; // Increased from 500 to 1000 characters per page
       const fullText = formattedText;
       const totalPages = Math.max(1, Math.ceil(fullText.length / charsPerPage));
       
@@ -935,7 +935,7 @@
     function updateMessageContent(messageDiv, page) {
       const fullText = messageDiv.getAttribute('data-full-text');
       const totalPages = parseInt(messageDiv.getAttribute('data-total-pages'));
-      const charsPerPage = 500; // Should match the value in addAIMessage
+      const charsPerPage = 1000; // Updated to match the value in addAIMessage
       
       const startChar = (page - 1) * charsPerPage;
       const endChar = Math.min(startChar + charsPerPage, fullText.length);
