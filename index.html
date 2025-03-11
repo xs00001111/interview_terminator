@@ -60,7 +60,6 @@
       display: flex;
       flex-direction: column;
       margin-bottom: 0;
-      max-height: 200px;
       overflow-y: auto;
     }
 
@@ -154,6 +153,7 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      font-size: clamp(12px, 1vw, 16px);
     }
     
     .message {
@@ -243,6 +243,17 @@
       font-size: 12px;
       opacity: 0.7;
       margin-bottom: 4px;
+    }
+    
+    .speaker-section {
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+    
+    .speaker-label {
+      display: inline-block;
+      margin-right: 5px;
+      font-weight: bold;
     }
     
     .context-area {
@@ -614,9 +625,64 @@
     window.electron.onTranscript((data) => {
       console.log('[DEBUG] Received transcript:', data);
       if (data.text && data.text.trim()) {
-        addHumanMessage(data.text);
+        // Check if we have speaker information
+        if (data.speakerInfo && data.speakerInfo.hasSpeakerInfo) {
+          addHumanMessageWithSpeakers(data.text, data.speakerInfo);
+        } else {
+          addHumanMessage(data.text);
+        }
       }
     });
+    
+    // Add a human message with speaker information
+    function addHumanMessageWithSpeakers(text, speakerInfo) {
+      // Keep pinned messages, remove others
+      const pinnedMessages = Array.from(conversationArea.querySelectorAll('.pinned-message'));
+      const nonPinnedMessages = Array.from(conversationArea.querySelectorAll('.message:not(.pinned-message):not(.welcome-message)'));
+      
+      // Remove non-pinned human messages only, preserve AI messages
+      nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
+      
+      // Create message container
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message human-message';
+      
+      // Add message label
+      const messageLabel = document.createElement('div');
+      messageLabel.className = 'message-label';
+      messageLabel.textContent = 'Conversation';
+      messageDiv.appendChild(messageLabel);
+      
+      // Add speaker sections
+      speakerInfo.speakers.forEach(speaker => {
+        const speakerDiv = document.createElement('div');
+        speakerDiv.className = 'speaker-section';
+        
+        const speakerLabel = document.createElement('span');
+        speakerLabel.className = 'speaker-label';
+        speakerLabel.textContent = `Speaker ${speaker.speakerTag}: `;
+        speakerLabel.style.fontWeight = 'bold';
+        speakerLabel.style.color = speaker.speakerTag === 1 ? '#3cc8ff' : '#ff9500';
+        
+        const speakerText = document.createElement('span');
+        speakerText.textContent = speaker.text;
+        
+        speakerDiv.appendChild(speakerLabel);
+        speakerDiv.appendChild(speakerText);
+        messageDiv.appendChild(speakerDiv);
+      });
+      
+      // Add to conversation
+      conversationArea.appendChild(messageDiv);
+      
+      // Scroll to the bottom if no messages are pinned
+      if (pinnedMessages.length === 0) {
+        conversationArea.scrollTop = conversationArea.scrollHeight;
+      } else {
+        // Otherwise scroll to the new message
+        messageDiv.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
     
     // Handle incoming suggestion data
     window.electron.onSuggestion((data) => {

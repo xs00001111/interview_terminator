@@ -2,7 +2,7 @@
 const encoding = 'LINEAR16';
 const sampleRateHertz = 16000;
 const languageCode = 'en-US';
-const streamingLimit = 10000; // ms - set to low number for demo purposes
+const streamingLimit = 20000; // ms - set to low number for demo purposes
 
 const chalk = require('chalk');
 const {Writable} = require('stream');
@@ -53,6 +53,8 @@ const client = new speech.SpeechClient({sslCreds});
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 let chatHistory = [];
+let lastGeminiGenerationTime = 0;
+const GEMINI_DEBOUNCE_DELAY = 15000; // 15 seconds in milliseconds
 
 // Using IPC for communication with the main process
 console.log('Using IPC for communication with the main process...');
@@ -129,6 +131,7 @@ async function generateDocumentSummary() {
       
       // Use the extracted content instead of raw file content
       fileContext = extractedContent;
+      fileContentPart = null; // Ensure fileContentPart is null for text files
     } 
     // For binary files, read as base64 for Gemini multimodal input
     else {
@@ -155,16 +158,22 @@ async function generateDocumentSummary() {
         'Summarize this document in 3-5 sentences'
       ]);
       documentSummary = result.response.text();
+      
+      // Store the extracted content as text for use in chat
+      fileContext = extractedContent;
     }
     
     // Display the summary and extracted content
-    console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
-    console.log(chalk.cyan(documentSummary));
-    console.log(chalk.cyan('============================\n'));
+    // console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
+    // console.log(chalk.cyan(documentSummary));
+    // console.log(chalk.cyan('============================\n'));
     
-    console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
-    console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
-    console.log(chalk.yellow('==============================\n'));
+    // console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
+    // console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
+    // console.log(chalk.yellow('==============================\n'));
+    
+    // Initialize chat with the new context
+    await initializeChat();
     
   } catch (error) {
     console.error(chalk.red(`Error processing file: ${error.message}`));
@@ -177,10 +186,11 @@ async function initializeChat() {
   // Create chat configuration with system instruction as text only
   const chatConfig = {
     history: chatHistory,
+    temprature: 0.2,
     systemInstruction: {
       role: "system",
       parts: [{ 
-        text: `You are an INTERVIEW COACH assisting an interviewee during a job interview. Provide EXTREMELY CONCISE real-time speaking suggestions (ONE SHORT SENTENCE ONLY, MAXIMUM 15 WORDS) IN THE INTERVIEWEE'S VOICE - not as a coach or AI assistant. Focus on professional, confident responses that highlight qualifications and experiences. STRICT BREVITY IS REQUIRED - responses must be short enough to read at a glance. ${fileContext ? "Use the extracted document content as context for crafting appropriate interview responses." : ""}` 
+        text: systemPrompt + (fileContext ? "\nUse the provided resume or personal introduction document to craft responses that match the user's background, experiences, and qualifications. When answering questions, reference specific details from their resume/introduction when appropriate." : "\nUse the previous conversation responses to maintain a consistent personality and background knowledge throughout the conversation.")
       }]
     }
   };
@@ -217,12 +227,15 @@ async function initializeChat() {
 
 // Initialize chat with default configuration
 // Will be properly initialized when context is loaded or by initializeChat()
+// Read system prompt from file
+const systemPrompt = fs.readFileSync('system_prompt.txt', 'utf8');
+
 let chat = model.startChat({
   history: [],
   systemInstruction: {
     role: "system",
     parts: [{ 
-      text: "You are an INTERVIEW COACH assisting an interviewee during a job interview. Provide EXTREMELY CONCISE real-time speaking suggestions (ONE SHORT SENTENCE ONLY, MAXIMUM 15 WORDS) IN THE INTERVIEWEE'S VOICE - not as a coach or AI assistant. Focus on professional, confident responses that highlight qualifications and experiences. STRICT BREVITY IS REQUIRED - responses must be short enough to read at a glance."
+      text: systemPrompt
     }]
   }
 });
@@ -234,6 +247,11 @@ const config = {
   encoding: encoding,
   sampleRateHertz: sampleRateHertz,
   languageCode: languageCode,
+  diarizationConfig: {
+    enableSpeakerDiarization: true,
+    minSpeakerCount: 2,
+    maxSpeakerCount: 2
+  },
 };
 
 const request = {
@@ -288,9 +306,37 @@ const speechCallback = stream => {
   }
   
   let stdoutText = '';
+  let speakerInfo = {};
+  
   if (stream.results[0] && stream.results[0].alternatives[0]) {
-    stdoutText =
-      correctedTime + ': ' + stream.results[0].alternatives[0].transcript;
+    const transcript = stream.results[0].alternatives[0].transcript;
+    stdoutText = correctedTime + ': ' + transcript;
+    
+    // Extract speaker diarization information if available
+    if (stream.results[0].alternatives[0].words && 
+        stream.results[0].alternatives[0].words.length > 0 && 
+        stream.results[0].alternatives[0].words[0].speakerTag) {
+      
+      // Group words by speaker
+      const wordsBySpeaker = {};
+      
+      stream.results[0].alternatives[0].words.forEach(word => {
+        const speakerTag = word.speakerTag || 0;
+        if (!wordsBySpeaker[speakerTag]) {
+          wordsBySpeaker[speakerTag] = [];
+        }
+        wordsBySpeaker[speakerTag].push(word.word);
+      });
+      
+      // Create speaker information object
+      speakerInfo = {
+        hasSpeakerInfo: true,
+        speakers: Object.keys(wordsBySpeaker).map(tag => ({
+          speakerTag: parseInt(tag),
+          text: wordsBySpeaker[tag].join(' ')
+        }))
+      };
+    }
   }
 
   if (stream.results[0].isFinal) {
@@ -301,9 +347,19 @@ const speechCallback = stream => {
     
     // Send transcript to the Electron frontend via IPC
     console.log('[SERVER] Sending transcript via IPC:', userMessage);
-    process.send({ type: 'transcript', data: { text: userMessage } });
-    
-    chat.sendMessageStream(userMessage)
+    process.send({ 
+      type: 'transcript', 
+      data: { 
+        text: userMessage,
+        speakerInfo: speakerInfo
+      } 
+    });
+
+    // Check if enough time has passed since the last generation
+    const currentTime = Date.now();
+    if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
+      lastGeminiGenerationTime = currentTime;
+      chat.sendMessageStream(userMessage)
       .then(async (result) => {
         let fullResponse = '';
         for await (const chunk of result.stream) {
@@ -325,7 +381,7 @@ const speechCallback = stream => {
           { role: 'user', parts: [{ text: userMessage }] },
           { role: 'model', parts: [{ text: fullResponse }] }
         );
-        });
+      }); // Added missing closing bracket
       
     isFinalEndTime = resultEndTime;
     lastTranscriptWasFinal = true;
@@ -337,14 +393,23 @@ const speechCallback = stream => {
     }
     process.stdout.write(chalk.red(`${stdoutText}`));
     
-    // Send interim transcript to the Electron frontend via IPC
-    if (stdoutText) {
-      process.send({ type: 'transcript', data: { text: stream.results[0].alternatives[0].transcript } });
-    }
+    // This section has been moved and updated with speaker info
 
     lastTranscriptWasFinal = false;
+    
+    // Send interim transcript to the Electron frontend via IPC with speaker info
+    if (stdoutText) {
+      process.send({ 
+        type: 'transcript', 
+        data: { 
+          text: stream.results[0].alternatives[0].transcript,
+          speakerInfo: speakerInfo,
+          isFinal: false
+        } 
+      });
+    }
   }
-};
+}};
 
 const audioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {

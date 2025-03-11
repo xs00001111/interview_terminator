@@ -15,9 +15,9 @@ function createWindow() {
   // Create the browser window
   mainWindow = new BrowserWindow({
     width: 800,
-    height: 200,
+    height: 400, // Increased from 200 to 400 for better visibility
     x: Math.floor((width - 800) / 2), // Center horizontally
-    y: height - 250, // Position near bottom of screen
+    y: height - 450, // Adjusted position to account for increased height
     frame: false, // No window frame
     transparent: true, // Transparent background
     alwaysOnTop: true, // Always on top of other windows
