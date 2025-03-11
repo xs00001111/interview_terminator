@@ -8,6 +8,15 @@ let serverProcess;
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow;
 
+// Track window visibility state
+let isWindowVisible = true;
+
+// Store window position and size for restoration
+let windowState = {
+  position: null,
+  size: null
+};
+
 function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
@@ -16,7 +25,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 400, // Increased from 200 to 400 for better visibility
-    x: Math.floor((width - 800) / 2), // Center horizontally
+    x: Math.floor((width - 800) / 2), // Center hocrizontally
     y: height - 450, // Adjusted position to account for increased height
     frame: false, // No window frame
     transparent: true, // Transparent background
@@ -175,6 +184,11 @@ app.whenReady().then(() => {
     }
   });
   
+  // Register keyboard shortcut for toggling window visibility (Command+B on Mac, Control+B on Windows)
+  globalShortcut.register('CommandOrControl+B', () => {
+    toggleWindowVisibility();
+  });
+  
   // Start the server process
   serverProcess = fork(path.join(__dirname, 'server.js'), [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
@@ -226,6 +240,40 @@ app.on('quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
 });
+
+// Function to toggle window visibility
+function toggleWindowVisibility() {
+  if (!mainWindow) {
+    // If window was closed, recreate it
+    createWindow();
+    isWindowVisible = true;
+    return;
+  }
+  
+  if (isWindowVisible) {
+    // Store current window state before hiding
+    windowState.position = mainWindow.getPosition();
+    windowState.size = mainWindow.getSize();
+    
+    // Hide the window
+    mainWindow.hide();
+    isWindowVisible = false;
+  } else {
+    // Show the window and restore position if available
+    mainWindow.show();
+    
+    // Restore previous position and size if available
+    if (windowState.position) {
+      mainWindow.setPosition(windowState.position[0], windowState.position[1]);
+    }
+    
+    if (windowState.size) {
+      mainWindow.setSize(windowState.size[0], windowState.size[1]);
+    }
+    
+    isWindowVisible = true;
+  }
+}
 
 // Quit when all windows are closed, except on macOS
 app.on('window-all-closed', function () {

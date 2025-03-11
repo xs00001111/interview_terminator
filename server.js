@@ -51,10 +51,10 @@ const sslCreds = getApiKeyCredentials();
 
 const client = new speech.SpeechClient({sslCreds});
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
-const GEMINI_DEBOUNCE_DELAY = 15000; // 15 seconds in milliseconds
+const GEMINI_DEBOUNCE_DELAY = 8000; // 15 seconds in milliseconds
 
 // Using IPC for communication with the main process
 console.log('Using IPC for communication with the main process...');
