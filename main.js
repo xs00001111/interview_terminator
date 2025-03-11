@@ -108,7 +108,10 @@ async function takeScreenshot(processAfterCapture = false) {
     
     // Notify the renderer process that the screenshot was taken
     if (mainWindow) {
-      mainWindow.webContents.send('screenshot-taken', { path: screenshotPath });
+      mainWindow.webContents.send('screenshot-taken', { 
+  path: screenshotPath, 
+  isShortcut: processAfterCapture 
+});
     }
     
     // If processAfterCapture is true, send the screenshot to the server for processing

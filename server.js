@@ -685,12 +685,69 @@ async function processScreenshot(screenshotPath) {
     console.log(chalk.green('\n===== EXTRACTED TEXT FROM SCREENSHOT ====='));
     console.log(extractedText);
     console.log(chalk.green('==========================================\n'));
+
+    // Generate solution using Gemini
+    console.log(chalk.yellow('Generating solution...'));
+    const systemPrompt = `You are a technical problem solver. Analyze the following text and:
+1. If it contains code:
+   - Identify any bugs or issues
+   - Provide corrected code with EXTREMELY CONCISE explanations
+   - Format the code properly with syntax highlighting
+2. If it contains system architecture or design:
+   - Analyze the design patterns and architecture
+   - Suggest improvements or best practices
+   - Format the documentation in a clear structure
+3. If it contains error messages:
+   - Diagnose the root cause
+   - Provide step-by-step solutions
+   - Include code examples if applicable
+
+Format your response in markdown for better readability.`;
+
+    const solutionResult = await model.generateContent([
+      systemPrompt,
+      `Here's the text to analyze:\n${extractedText}`
+    ]);
+
+    const solution = solutionResult.response.text();
     
-    // Send the extracted text to the frontend
+    // Print the solution to the terminal
+    console.log(chalk.green('\n===== GENERATED SOLUTION ====='));
+    console.log(solution);
+    console.log(chalk.green('================================\n'));
+    
+    // Format and send only the solution to the frontend
+    let formattedSolution = solution;
+    
+    // Check if the solution contains code blocks and add syntax highlighting
+    if (solution.includes('```')) {
+      // Solution already contains markdown code blocks, keep as is
+      formattedSolution = solution;
+    } else if (solution.match(/^[\s\S]*?[{};].*$/m)) {
+      // Looks like code, wrap it in a code block
+      formattedSolution = '```\n' + solution + '\n```';
+    } else {
+      // Not code, ensure proper markdown formatting
+      formattedSolution = solution
+        .split('\n')
+        .map(line => {
+          // Add proper markdown list formatting if needed
+          if (line.trim().match(/^[0-9]+\./)) {
+            return line; // Already numbered list
+          } else if (line.trim().match(/^[-*]/)) {
+            return line; // Already bullet list
+          } else if (line.trim().length > 0) {
+            return line;
+          }
+          return line;
+        })
+        .join('\n');
+    }
+
     process.send({
       type: 'suggestion',
       data: {
-        text: `Extracted text from screenshot:\n${extractedText}`
+        text: formattedSolution
       }
     });
     
@@ -699,7 +756,8 @@ async function processScreenshot(screenshotPath) {
       type: 'screenshot-processed',
       data: {
         success: true,
-        text: extractedText
+        text: extractedText,
+        solution: solution
       }
     });
     
@@ -708,10 +766,19 @@ async function processScreenshot(screenshotPath) {
     console.error(chalk.red(`Error processing screenshot: ${error.message}`));
     
     // Send error to the frontend
+    // Send error to frontend
     process.send({
       type: 'error',
       data: {
         message: `Error processing screenshot: ${error.message}`
+      }
+    });
+    
+    // Send empty suggestion to clear notifications
+    process.send({
+      type: 'suggestion',
+      data: {
+        text: ''
       }
     });
     

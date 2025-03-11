@@ -168,7 +168,8 @@
     
     .conversation-area {
       flex-grow: 1;
-      overflow-y: auto;
+      height: 100%;
+      min-height: 200px;
       margin-bottom: 10px;
       display: flex;
       flex-direction: column;
@@ -203,6 +204,29 @@
       width: 100%;
       box-sizing: border-box;
       position: relative;
+      overflow-y: auto;
+    }
+    
+    .welcome-message .formatted-content {
+      padding-right: 8px;
+    }
+    
+    .welcome-message::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .welcome-message::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.1);
+      border-radius: 3px;
+    }
+    
+    .welcome-message::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+    }
+    
+    .welcome-message::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.5);
     }
     
     .pinned-message {
@@ -697,7 +721,7 @@
       
       // Scroll to the bottom if no messages are pinned
       if (pinnedMessages.length === 0) {
-        conversationArea.scrollTop = conversationArea.scrollHeight;
+        container.scrollTop = container.scrollHeight;
       } else {
         // Otherwise scroll to the new message
         messageDiv.scrollIntoView({ behavior: 'smooth' });
@@ -741,7 +765,7 @@
       
       // Scroll to the bottom if no messages are pinned
       if (pinnedMessages.length === 0) {
-        conversationArea.scrollTop = conversationArea.scrollHeight;
+        container.scrollTop = container.scrollHeight;
       } else {
         // Otherwise scroll to the new message
         messageDiv.scrollIntoView({ behavior: 'smooth' });
@@ -753,6 +777,12 @@
       // Remove any existing AI messages that are not pinned
       const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
       aiMessages.forEach(msg => conversationArea.removeChild(msg));
+
+      // Remove welcome message when image is processed
+      if (text.toLowerCase().includes('image processed')) {
+        const welcomeMsg = conversationArea.querySelector('.welcome-message');
+        if (welcomeMsg) conversationArea.removeChild(welcomeMsg);
+      }
       
       // Create message container
       const messageDiv = document.createElement('div');
@@ -799,10 +829,8 @@
       // Add to conversation
       conversationArea.appendChild(messageDiv);
       
-      // Scroll to the bottom if no messages are pinned
-      if (!document.querySelector('.pinned-message')) {
-        conversationArea.scrollTop = conversationArea.scrollHeight;
-      }
+      // Always scroll to bottom
+      container.scrollTop = container.scrollHeight;
     }
     
     // Format text to handle structured content like lists and code blocks
@@ -946,6 +974,27 @@
     
     // Initialize the UI
     initializeUI();
+
+    // Add keyboard navigation for scrolling
+    document.addEventListener('keydown', (e) => {
+      const container = document.querySelector('.container');
+const conversationArea = document.querySelector('.conversation-area');
+      const scrollAmount = 50; // Pixels to scroll per key press
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault(); // Prevent default scroll behavior
+        conversationArea.scrollBy({
+          top: -scrollAmount,
+          behavior: 'smooth'
+        });
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault(); // Prevent default scroll behavior
+        conversationArea.scrollBy({
+          top: scrollAmount,
+          behavior: 'smooth'
+        });
+      }
+    });
     
     // Setup resize handlers
     const resizeHandleE = document.getElementById('resize-e');
@@ -1071,22 +1120,31 @@
     
     // Listen for screenshot taken events
     window.electron.onScreenshotTaken((data) => {
-      // Create a notification message
-      const messageDiv = document.createElement('div');
-      messageDiv.className = 'message ai-message';
-      messageDiv.textContent = `Screenshot saved to: ${data.path}`;
-      conversationArea.appendChild(messageDiv);
-      
-      // Auto-scroll to the bottom
-      conversationArea.scrollTop = conversationArea.scrollHeight;
-      
-      // Remove the notification after 5 seconds
-      setTimeout(() => {
-        messageDiv.style.opacity = '0';
+      // Only show notification if not from keyboard shortcut
+      if (!data.isShortcut) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message ai-message screenshot-notification';
+        messageDiv.textContent = `Screenshot saved to: ${data.path}`;
+        conversationArea.appendChild(messageDiv);
+        
+        // Auto-scroll to the bottom
+        container.scrollTop = container.scrollHeight;
+        
+        // Remove the notification after 5 seconds
         setTimeout(() => {
-          conversationArea.removeChild(messageDiv);
-        }, 500);
-      }, 5000);
+          messageDiv.style.opacity = '0';
+          setTimeout(() => {
+            conversationArea.removeChild(messageDiv);
+          }, 500);
+        }, 5000);
+      }
+    });
+    
+    // Remove screenshot notifications when receiving AI responses
+    window.electron.onSuggestion((data) => {
+      document.querySelectorAll('.screenshot-notification').forEach(notification => {
+        notification.remove();
+      });
     });
   </script>
 </body>
