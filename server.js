@@ -63,6 +63,75 @@ console.log('Using IPC for communication with the main process...');
 let isRecording = false;
 let recordingStream = null;
 
+function startRecording() {
+  if (isRecording) return;
+  
+  isRecording = true;
+  audioInput = [];
+  lastAudioInput = [];
+  restartCounter = 0;
+  
+  // Start the recording
+  recordingStream = recorder
+    .record({
+      sampleRateHertz: sampleRateHertz,
+      threshold: 0, // Silence threshold
+      silence: 1000,
+      keepSilence: true,
+      recordProgram: 'rec', // Try also "arecord" or "sox"
+    })
+    .stream()
+    .on('error', err => {
+      console.error('Audio recording error:', err);
+      // Ensure we always have a valid error message to send to the frontend
+      const errorMessage = err && err.message ? err.message : 'Unknown recording error';
+      process.send({ type: 'error', data: { message: `Audio recording error: ${errorMessage}` } });
+      isRecording = false;
+    });
+  
+  // Pipe the recording stream to the audio input stream transform
+  recordingStream.pipe(audioInputStreamTransform);
+  
+  console.log(chalk.cyan('\n===== RECORDING STARTED ====='));
+  console.log('Listening, press Stop to end recording.');
+  console.log('');
+  console.log('End (ms)       Transcript Results/Status');
+  console.log('=========================================================');
+  
+  // Start the speech recognition stream
+  startStream();
+}
+
+// Stop the recording and speech recognition
+function stopRecording() {
+  if (!isRecording) return;
+  
+  isRecording = false;
+  
+  try {
+    // Stop the recording stream
+    if (recordingStream) {
+      recordingStream.unpipe(audioInputStreamTransform);
+      recordingStream.destroy();
+      recordingStream = null;
+    }
+    
+    // Stop the speech recognition stream
+    if (recognizeStream) {
+      recognizeStream.end();
+      recognizeStream.removeListener('data', speechCallback);
+      recognizeStream = null;
+    }
+    
+    console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
+  } catch (error) {
+    // Handle any errors that occur during stopping
+    const errorMessage = error && error.message ? error.message : 'Unknown error stopping recording';
+    console.error(chalk.red(`Error stopping recording: ${errorMessage}`));
+    process.send({ type: 'error', data: { message: `Error stopping recording: ${errorMessage}` } });
+  }
+}
+
 // Listen for messages from the main process
 process.on('message', (message) => {
   if (message.type === 'start-recording') {
