@@ -189,6 +189,11 @@ app.whenReady().then(() => {
     toggleWindowVisibility();
   });
   
+  // Register keyboard shortcut for quitting the application (Command+Q on Mac, Control+Q on Windows)
+  globalShortcut.register('CommandOrControl+Q', () => {
+    app.quit();
+  });
+  
   // Start the server process
   serverProcess = fork(path.join(__dirname, 'server.js'), [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
