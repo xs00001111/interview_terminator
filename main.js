@@ -41,8 +41,8 @@ async function takeScreenshot(processAfterCapture = false) {
       mainWindow.hide();
     }
     
-    // Small delay to ensure the window is hidden before taking the screenshot
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Reduced delay to minimize latency while still ensuring window is hidden
+    await new Promise(resolve => setTimeout(resolve, 50));
     
     // Get screenshot buffer using native methods based on platform
     const screenshotBuffer = 
@@ -77,7 +77,7 @@ async function takeScreenshot(processAfterCapture = false) {
     console.log(`Screenshot saved to: ${screenshotPath} (${stats.size} bytes)`);
     
     // Manage screenshot queue (keeping only the most recent screenshots)
-    const MAX_SCREENSHOTS = 10; // Maximum number of screenshots to keep
+    const MAX_SCREENSHOTS = 5; // Reduced from 10 to minimize disk usage and improve performance
     const screenshotFiles = fs.readdirSync(screenshotDir)
       .filter(file => file.startsWith('screenshot-'))
       .map(file => path.join(screenshotDir, file));
@@ -102,8 +102,8 @@ async function takeScreenshot(processAfterCapture = false) {
     
     // Show the main window again if it was visible before
     if (wasVisible && mainWindow) {
-      // Small delay before showing window again
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Minimal delay before showing window again to reduce latency
+      await new Promise(resolve => setTimeout(resolve, 25));
       mainWindow.show();
       if (windowState.position) {
         mainWindow.setPosition(windowState.position[0], windowState.position[1]);
@@ -146,10 +146,12 @@ async function captureScreenshotMac() {
     // Create a temporary file path for the screenshot
     const tempPath = path.join(screenshotDir, `temp-${Date.now()}.png`);
     
-    // Use the screencapture utility on macOS
-    const { exec } = require('child_process');
+    // Use the screencapture utility on macOS with optimized options
+    const { execFile } = require('child_process');
     await new Promise((resolve, reject) => {
-      exec(`screencapture -x ${tempPath}`, (error) => {
+      // Using execFile instead of exec for better performance and security
+      // -x: no sound, -t: png format (faster than default), -C: no cursor
+      execFile('screencapture', ['-x', '-t', 'png', '-C', tempPath], (error) => {
         if (error) {
           reject(error);
           return;

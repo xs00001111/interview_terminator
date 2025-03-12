@@ -1068,13 +1068,22 @@
       }
     });
     
-    // Handle toggle recording button click
+    // Handle toggle recording button click with debounce to prevent multiple rapid clicks
+    let recordingButtonDebounce = false;
     toggleRecordingButton.addEventListener('click', () => {
+      if (recordingButtonDebounce) return;
+      recordingButtonDebounce = true;
+      
       if (isRecording) {
         window.electron.stopRecording();
       } else {
         window.electron.startRecording();
       }
+      
+      // Reset debounce after short delay
+      setTimeout(() => {
+        recordingButtonDebounce = false;
+      }, 300);
     });
     
     // Handle screenshot button click

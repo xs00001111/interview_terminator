@@ -54,7 +54,7 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
-const GEMINI_DEBOUNCE_DELAY = 2000; // 2 seconds in milliseconds
+const GEMINI_DEBOUNCE_DELAY = 1000; // 1 second in milliseconds (reduced from 2s to improve responsiveness)
 
 // Using IPC for communication with the main process
 // Using IPC for communication with the main process
@@ -446,12 +446,14 @@ const speechCallback = stream => {
     // If not pinned and enough time has passed, generate new suggestion
     else if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
       lastGeminiGenerationTime = currentTime;
-      chat.sendMessageStream(userMessage)
+      chat.sendMessageStream(userMessage, {
+        timeout: 30000 // Add timeout to prevent hanging requests
+      })
       .then(async (result) => {
         let fullResponse = '';
         for await (const chunk of result.stream) {
           fullResponse += chunk.text();
-          process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
+          // Remove console logging to improve performance
         }
         
         // Send AI suggestion to the Electron frontend via IPC without logging
@@ -740,18 +742,20 @@ async function processScreenshot(screenshotPath) {
     };
     
     // Extract text from the image using Gemini
-    console.log(chalk.yellow('Extracting text from image using Gemini...'));
+    // Reduced logging to improve performance
     const extractResult = await model.generateContent([
       imagePart,
       'Extract all the text visible in this image. Return only the extracted text without any additional commentary.'
-    ]);
+    ], {
+      timeout: 30000 // Add timeout to prevent hanging requests
+    });
     
     const extractedText = extractResult.response.text();
     
     // Skip printing extracted text to terminal to reduce overhead
 
     // Generate solution using Gemini
-    console.log(chalk.yellow('Generating solution...'));
+    // Reduced logging to improve performance
     const systemPrompt = `You are a technical problem solver. Analyze the following text and:
 1. If it contains code:
    - Identify any bugs or issues
@@ -771,40 +775,24 @@ Format your response in markdown for better readability.`;
     const solutionResult = await model.generateContent([
       systemPrompt,
       `Here's the text to analyze:\n${extractedText}`
-    ]);
+    ], {
+      timeout: 30000 // Add timeout to prevent hanging requests
+    });
 
     const solution = solutionResult.response.text();
     
     // Skip printing solution to terminal to reduce overhead
     
-    // Format and send only the solution to the frontend
+    // Simplified formatting to reduce processing overhead
     let formattedSolution = solution;
     
-    // Check if the solution contains code blocks and add syntax highlighting
-    if (solution.includes('```')) {
-      // Solution already contains markdown code blocks, keep as is
-      formattedSolution = solution;
-    } else if (solution.match(/^[\s\S]*?[{};].*$/m)) {
+    // Only apply minimal formatting when needed
+    if (!solution.includes('```') && solution.match(/^[\s\S]*?[{};].*$/m)) {
       // Looks like code, wrap it in a code block
       formattedSolution = '```\n' + solution + '\n```';
-    } else {
-      // Not code, ensure proper markdown formatting
-      formattedSolution = solution
-        .split('\n')
-        .map(line => {
-          // Add proper markdown list formatting if needed
-          if (line.trim().match(/^[0-9]+\./)) {
-            return line; // Already numbered list
-          } else if (line.trim().match(/^[-*]/)) {
-            return line; // Already bullet list
-          } else if (line.trim().length > 0) {
-            return line;
-          }
-          return line;
-        })
-        .join('\n');
     }
 
+    // Send smaller payload to reduce IPC overhead
     process.send({
       type: 'suggestion',
       data: {
@@ -812,13 +800,11 @@ Format your response in markdown for better readability.`;
       }
     });
     
-    // Also send a specific screenshot processed event
+    // Send minimal data in screenshot processed event
     process.send({
       type: 'screenshot-processed',
       data: {
-        success: true,
-        text: extractedText,
-        solution: solution
+        success: true
       }
     });
     
@@ -826,8 +812,7 @@ Format your response in markdown for better readability.`;
   } catch (error) {
     console.error(chalk.red(`Error processing screenshot: ${error.message}`));
     
-    // Send error to the frontend
-    // Send error to frontend
+    // Combine error messages to reduce number of IPC calls
     process.send({
       type: 'error',
       data: {
@@ -835,20 +820,13 @@ Format your response in markdown for better readability.`;
       }
     });
     
-    // Send empty suggestion to clear notifications
-    process.send({
-      type: 'suggestion',
-      data: {
-        text: ''
-      }
-    });
-    
-    // Also send a specific screenshot processed event with error
+    // Send screenshot processed event with error (combined with suggestion clear)
     process.send({
       type: 'screenshot-processed',
       data: {
         success: false,
-        error: error.message
+        error: error.message,
+        clearSuggestion: true
       }
     });
     
