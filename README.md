@@ -59,11 +59,17 @@ A real-time speech transcription application that uses Google Speech-to-Text API
 
 ### Using Document Context
 
-You can provide a document as context for the AI suggestions and chat:
+You can provide a document as context for the AI suggestions and chat directly through the application interface:
 
-```
-npm start -- --file=/path/to/your/document.pdf
-```
+1. Click on the context icon (document symbol) in the application window.
+
+2. Select a file from your computer using the file browser dialog.
+
+3. Once uploaded, the application will process the document and display a summary of the context.
+
+4. The AI will now incorporate information from this document in its responses and suggestions.
+
+5. To remove the current context, click on the context icon again and select the option to clear context.
 
 Supported file types include text files, PDFs, and common image formats.
 
