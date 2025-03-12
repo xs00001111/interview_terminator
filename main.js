@@ -212,22 +212,37 @@ function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
 
-  // Create the browser window
+  // Create the browser window with enhanced undetectability features
   mainWindow = new BrowserWindow({
     width: 800,
-    height: 400, // Increased from 200 to 400 for better visibility
-    x: Math.floor((width - 800) / 2), // Center hocrizontally
-    y: height - 450, // Adjusted position to account for increased height
-    frame: false, // No window frame
-    transparent: true, // Transparent background
-    alwaysOnTop: true, // Always on top of other windows
-    resizable: true, // Allow window to be resized
+    height: 400,
+    x: Math.floor((width - 800) / 2),
+    y: height - 450,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000', // Fully transparent background
+    hasShadow: false, // Disable window shadow
+    alwaysOnTop: true,
+    resizable: true,
+    skipTaskbar: true, // Hide from taskbar/dock
+    type: 'panel', // Less detectable window type
+    visibleOnAllWorkspaces: true, // Visible on all virtual desktops
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false // Prevent throttling when in background
     }
   });
+
+  // Apply platform-specific undetectability settings
+  if (process.platform === 'darwin') {
+    // macOS specific settings
+    mainWindow.setHiddenInMissionControl(true); // Hide from Mission Control
+  }
+
+  // Enable content protection to prevent screen capture
+  mainWindow.setContentProtection(true);
 
   // Load index.html directly
   mainWindow.loadURL('file://' + path.join(__dirname, 'index.html'));
@@ -395,6 +410,16 @@ app.whenReady().then(() => {
     takeScreenshot(true);
   });
   
+  // Register keyboard shortcut for quick hide (Escape key)
+  globalShortcut.register('Escape', () => {
+    if (mainWindow && isWindowVisible) {
+      // Quick hide with opacity
+      mainWindow.setOpacity(0);
+      mainWindow.setIgnoreMouseEvents(true);
+      isWindowVisible = false;
+    }
+  });
+  
   // Start the server process
   serverProcess = fork(path.join(__dirname, 'server.js'), [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
@@ -451,7 +476,7 @@ app.on('quit', () => {
   globalShortcut.unregisterAll();
 });
 
-// Function to toggle window visibility
+// Enhanced function to toggle window visibility with undetectability features
 function toggleWindowVisibility() {
   if (!mainWindow) {
     // If window was closed, recreate it
@@ -465,12 +490,16 @@ function toggleWindowVisibility() {
     windowState.position = mainWindow.getPosition();
     windowState.size = mainWindow.getSize();
     
-    // Hide the window
-    mainWindow.hide();
+    // Hide the window using opacity for smoother transition
+    mainWindow.setOpacity(0);
+    // Ignore mouse events when hidden
+    mainWindow.setIgnoreMouseEvents(true);
     isWindowVisible = false;
   } else {
-    // Show the window and restore position if available
-    mainWindow.show();
+    // Restore mouse event handling
+    mainWindow.setIgnoreMouseEvents(false);
+    // Show the window with opacity transition
+    mainWindow.setOpacity(1);
     
     // Restore previous position and size if available
     if (windowState.position) {
