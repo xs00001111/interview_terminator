@@ -53,7 +53,7 @@ async function takeScreenshot(processAfterCapture = false) {
     // Handle pin status change
     ipcMain.on('set-pin-status', (event, pinned) => {
       if (serverProcess) {
-        serverProcess.send({ type: 'pin-status', data: { pinned } });
+        serverProcess.send({ type: 'pin-status-change', data: { pinned } });
       }
     });
     

@@ -54,10 +54,10 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
-const GEMINI_DEBOUNCE_DELAY = 6000; // 6 seconds in milliseconds
+const GEMINI_DEBOUNCE_DELAY = 2000; // 2 seconds in milliseconds
 
 // Using IPC for communication with the main process
-console.log('Using IPC for communication with the main process...');
+// Using IPC for communication with the main process
 
 // Recording state
 let isRecording = false;
@@ -92,11 +92,8 @@ function startRecording() {
   // Pipe the recording stream to the audio input stream transform
   recordingStream.pipe(audioInputStreamTransform);
   
+  // Minimal logging for recording start
   console.log(chalk.cyan('\n===== RECORDING STARTED ====='));
-  console.log('Listening, press Stop to end recording.');
-  console.log('');
-  console.log('End (ms)       Transcript Results/Status');
-  console.log('=========================================================');
   
   // Start the speech recognition stream
   startStream();
@@ -131,6 +128,9 @@ function stopRecording() {
     process.send({ type: 'error', data: { message: `Error stopping recording: ${errorMessage}` } });
   }
 }
+
+// Variable to track if a message is currently pinned
+let isPinned = false;
 
 // Add function to handle pin status changes
 function handlePinStatusChange(pinned) {
@@ -427,8 +427,7 @@ const speechCallback = stream => {
     // Send finalized transcript to Gemini
     const userMessage = stream.results[0].alternatives[0].transcript;
     
-    // Send transcript to the Electron frontend via IPC
-    console.log('[SERVER] Sending transcript via IPC:', userMessage);
+    // Send transcript to the Electron frontend via IPC without logging
     process.send({ 
       type: 'transcript', 
       data: { 
@@ -439,7 +438,13 @@ const speechCallback = stream => {
 
     // Check if enough time has passed since the last generation
     const currentTime = Date.now();
-    if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
+    
+    // Check if message is pinned - don't generate new suggestions if pinned
+    if (isPinned) {
+      console.log(chalk.yellow('Skipping AI suggestion generation - message is pinned'));
+    }
+    // If not pinned and enough time has passed, generate new suggestion
+    else if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
       lastGeminiGenerationTime = currentTime;
       chat.sendMessageStream(userMessage)
       .then(async (result) => {
@@ -449,8 +454,7 @@ const speechCallback = stream => {
           process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
         }
         
-        // Send AI suggestion to the Electron frontend via IPC
-        console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
+        // Send AI suggestion to the Electron frontend via IPC without logging
         process.send({ type: 'suggestion', data: { text: fullResponse } });
         
         // Update chat history
@@ -581,14 +585,7 @@ async function setTextContext(text) {
     fileContext = extractedContent;
     fileContentPart = null;
     
-    // Display the summary and extracted content
-    console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
-    console.log(chalk.cyan(documentSummary));
-    console.log(chalk.cyan('============================\n'));
-    
-    console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
-    console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
-    console.log(chalk.yellow('==============================\n'));
+    // Skip displaying summary and extracted content in console to reduce overhead
     
     // Initialize chat with the new context
     await initializeChat();
@@ -671,14 +668,7 @@ async function processContextFile(filePath) {
       documentSummary = result.response.text();
     }
     
-    // Display the summary and extracted content
-    console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
-    console.log(chalk.cyan(documentSummary));
-    console.log(chalk.cyan('============================\n'));
-    
-    console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
-    console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
-    console.log(chalk.yellow('==============================\n'));
+    // Skip displaying summary and extracted content in console to reduce overhead
     
     // Initialize chat with the new context
     await initializeChat();
@@ -758,10 +748,7 @@ async function processScreenshot(screenshotPath) {
     
     const extractedText = extractResult.response.text();
     
-    // Print the extracted text to the terminal
-    console.log(chalk.green('\n===== EXTRACTED TEXT FROM SCREENSHOT ====='));
-    console.log(extractedText);
-    console.log(chalk.green('==========================================\n'));
+    // Skip printing extracted text to terminal to reduce overhead
 
     // Generate solution using Gemini
     console.log(chalk.yellow('Generating solution...'));
@@ -788,10 +775,7 @@ Format your response in markdown for better readability.`;
 
     const solution = solutionResult.response.text();
     
-    // Print the solution to the terminal
-    console.log(chalk.green('\n===== GENERATED SOLUTION ====='));
-    console.log(solution);
-    console.log(chalk.green('================================\n'));
+    // Skip printing solution to terminal to reduce overhead
     
     // Format and send only the solution to the frontend
     let formattedSolution = solution;

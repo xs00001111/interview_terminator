@@ -77,6 +77,21 @@ The AI chat feature provides:
 - Document-aware responses when a context file is provided
 - Intelligent suggestions that adapt to your conversation flow
 
+### Keyboard Shortcuts
+
+The application supports the following keyboard shortcuts for improved productivity:
+
+| Action | Mac | Windows/Linux |
+|--------|-----|---------------|
+| Toggle window visibility | Cmd+B | Ctrl+B |
+| Quit application | Cmd+Q | Ctrl+Q |
+| Take screenshot | Cmd+H | Ctrl+H |
+| Take and process screenshot | Cmd+Enter | Ctrl+Enter |
+| Move window up | Cmd+Up | Ctrl+Up |
+| Move window down | Cmd+Down | Ctrl+Down |
+| Move window left | Cmd+Left | Ctrl+Left |
+| Move window right | Cmd+Right | Ctrl+Right |
+
 ## Development
 
 To run the application in development mode with hot reloading:

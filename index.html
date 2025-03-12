@@ -38,7 +38,7 @@
     }
     
     .container {
-      min-height: 400px;
+      min-height: 300px;
       max-height: 90vh;
       display: flex;
       flex-direction: column;
@@ -809,6 +809,16 @@
     
     // Add an AI message to the conversation
     function addAIMessage(text) {
+      // Check if there's a pinned message
+      const pinnedMessages = conversationArea.querySelectorAll('.pinned-message');
+      const hasPinnedMessage = pinnedMessages.length > 0;
+      
+      // If there's a pinned message, don't add new AI messages
+      if (hasPinnedMessage) {
+        console.log('Skipping new AI message - a message is currently pinned');
+        return;
+      }
+      
       // Remove any existing AI messages that are not pinned
       const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
       aiMessages.forEach(msg => conversationArea.removeChild(msg));
