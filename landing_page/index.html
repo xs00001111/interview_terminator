@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Realtime Conversation Helper</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <!-- Navigation Bar -->
+  <nav class="navbar">
+    <div class="container">
+      <div class="logo">Conversation Helper</div>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How It Works</a>
+        <a href="#testimonials">Testimonials</a>
+        <a href="#pricing">Pricing</a>
+      </div>
+      <div class="auth-buttons">
+        <button id="login-btn" class="btn btn-outline">Log In</button>
+        <button id="signup-btn" class="btn btn-primary">Sign Up</button>
+      </div>
+      <div class="menu-toggle">
+        <i class="fas fa-bars"></i>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <h1>Transform Your Conversations with AI</h1>
+        <p>Realtime Conversation Helper uses advanced AI to transcribe, analyze, and enhance your conversations in real-time.</p>
+        <button id="hero-signup-btn" class="btn btn-primary btn-large">Get Started</button>
+      </div>
+      <div class="hero-image">
+        <img src="images/hero-image.png" alt="Conversation Helper in action">
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section id="features" class="features">
+    <div class="container">
+      <h2 class="section-title">Powerful Features</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i class="fas fa-microphone"></i>
+          </div>
+          <h3>Real-time Transcription</h3>
+          <p>Instantly convert speech to text with high accuracy using Google's Speech-to-Text API.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i class="fas fa-brain"></i>
+          </div>
+          <h3>AI-Powered Analysis</h3>
+          <p>Get intelligent insights and suggestions during your conversations with Google Gemini.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i class="fas fa-desktop"></i>
+          </div>
+          <h3>Desktop Integration</h3>
+          <p>Works seamlessly with your desktop applications and stays on top of other windows.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <i class="fas fa-lock"></i>
+          </div>
+          <h3>Secure & Private</h3>
+          <p>Your conversations are processed securely and never stored without your permission.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works Section -->
+  <section id="how-it-works" class="how-it-works">
+    <div class="container">
+      <h2 class="section-title">How It Works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <h3>Sign Up</h3>
+          <p>Create an account and connect your Google API keys or use our managed service.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <h3>Install & Configure</h3>
+          <p>Download our desktop application and set your preferences.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <h3>Start Conversations</h3>
+          <p>Begin speaking and watch as your speech is transcribed and analyzed in real-time.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <h3>Get Insights</h3>
+          <p>Receive helpful suggestions, summaries, and action items from your conversations.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Testimonials Section -->
+  <section id="testimonials" class="testimonials">
+    <div class="container">
+      <h2 class="section-title">What Our Users Say</h2>
+      <div class="testimonial-slider">
+        <div class="testimonial">
+          <div class="testimonial-content">
+            <p>"This tool has completely transformed how I conduct client meetings. The real-time insights help me provide better solutions on the spot."</p>
+          </div>
+          <div class="testimonial-author">
+            <img src="images/testimonial-1.jpg" alt="Sarah Johnson">
+            <div>
+              <h4>Sarah Johnson</h4>
+              <p>Marketing Consultant</p>
+            </div>
+          </div>
+        </div>
+        <div class="testimonial">
+          <div class="testimonial-content">
+            <p>"As someone with ADHD, this tool helps me stay focused during important conversations and ensures I don't miss critical details."</p>
+          </div>
+          <div class="testimonial-author">
+            <img src="images/testimonial-2.jpg" alt="David Chen">
+            <div>
+              <h4>David Chen</h4>
+              <p>Software Engineer</p>
+            </div>
+          </div>
+        </div>
+        <div class="testimonial">
+          <div class="testimonial-content">
+            <p>"The AI suggestions during my therapy sessions have been invaluable. It helps me identify patterns I might otherwise miss."</p>
+          </div>
+          <div class="testimonial-author">
+            <img src="images/testimonial-3.jpg" alt="Dr. Emily Rodriguez">
+            <div>
+              <h4>Dr. Emily Rodriguez</h4>
+              <p>Clinical Psychologist</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-dots">
+        <span class="dot active"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing Section -->
+  <section id="pricing" class="pricing">
+    <div class="container">
+      <h2 class="section-title">Simple, Transparent Pricing</h2>
+      <div class="pricing-cards">
+        <div class="pricing-card">
+          <div class="pricing-header">
+            <h3>Basic</h3>
+            <div class="price">$9.99<span>/month</span></div>
+          </div>
+          <ul class="pricing-features">
+            <li><i class="fas fa-check"></i> Real-time transcription</li>
+            <li><i class="fas fa-check"></i> Basic AI insights</li>
+            <li><i class="fas fa-check"></i> 10 hours of processing per month</li>
+            <li><i class="fas fa-check"></i> Desktop application</li>
+            <li class="disabled"><i class="fas fa-times"></i> Advanced analytics</li>
+            <li class="disabled"><i class="fas fa-times"></i> Custom AI training</li>
+          </ul>
+          <button class="btn btn-outline btn-full">Choose Basic</button>
+        </div>
+        <div class="pricing-card featured">
+          <div class="pricing-header">
+            <div class="popular-tag">Most Popular</div>
+            <h3>Professional</h3>
+            <div class="price">$24.99<span>/month</span></div>
+          </div>
+          <ul class="pricing-features">
+            <li><i class="fas fa-check"></i> Real-time transcription</li>
+            <li><i class="fas fa-check"></i> Advanced AI insights</li>
+            <li><i class="fas fa-check"></i> 30 hours of processing per month</li>
+            <li><i class="fas fa-check"></i> Desktop application</li>
+            <li><i class="fas fa-check"></i> Basic analytics dashboard</li>
+            <li class="disabled"><i class="fas fa-times"></i> Custom AI training</li>
+          </ul>
+          <button class="btn btn-primary btn-full">Choose Professional</button>
+        </div>
+        <div class="pricing-card">
+          <div class="pricing-header">
+            <h3>Enterprise</h3>
+            <div class="price">$49.99<span>/month</span></div>
+          </div>
+          <ul class="pricing-features">
+            <li><i class="fas fa-check"></i> Real-time transcription</li>
+            <li><i class="fas fa-check"></i> Premium AI insights</li>
+            <li><i class="fas fa-check"></i> Unlimited processing</li>
+            <li><i class="fas fa-check"></i> Desktop application</li>
+            <li><i class="fas fa-check"></i> Advanced analytics dashboard</li>
+            <li><i class="fas fa-check"></i> Custom AI training</li>
+          </ul>
+          <button class="btn btn-outline btn-full">Choose Enterprise</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta">
+    <div class="container">
+      <h2>Ready to Transform Your Conversations?</h2>
+      <p>Join thousands of professionals who are enhancing their communication with AI.</p>
+      <button id="cta-signup-btn" class="btn btn-primary btn-large">Get Started Now</button>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-col">
+          <div class="logo">Conversation Helper</div>
+          <p>Enhancing human communication with the power of AI.</p>
+          <div class="social-links">
+            <a href="#"><i class="fab fa-twitter"></i></a>
+            <a href="#"><i class="fab fa-facebook"></i></a>
+            <a href="#"><i class="fab fa-linkedin"></i></a>
+            <a href="#"><i class="fab fa-github"></i></a>
+          </div>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#pricing">Pricing</a></li>
+            <li><a href="#">Download</a></li>
+            <li><a href="#">Updates</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <ul>
+            <li><a href="#">About Us</a></li>
+            <li><a href="#">Careers</a></li>
+            <li><a href="#">Blog</a></li>
+            <li><a href="#">Contact</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Support</h4>
+          <ul>
+            <li><a href="#">Help Center</a></li>
+            <li><a href="#">Documentation</a></li>
+            <li><a href="#">Community</a></li>
+            <li><a href="#">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2023 Conversation Helper. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Auth Modal -->
+  <div id="auth-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal">&times;</span>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-tab="login">Log In</button>
+        <button class="auth-tab" data-tab="signup">Sign Up</button>
+      </div>
+      
+      <!-- Login Form -->
+      <div id="login-form" class="auth-form active">
+        <h2>Welcome Back</h2>
+        <div class="form-group">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" placeholder="Enter your email">
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" placeholder="Enter your password">
+        </div>
+        <div class="form-group remember-forgot">
+          <div>
+            <input type="checkbox" id="remember-me">
+            <label for="remember-me">Remember me</label>
+          </div>
+          <a href="#" class="forgot-password">Forgot password?</a>
+        </div>
+        <button id="login-submit" class="btn btn-primary btn-full">Log In</button>
+        <div class="auth-divider">
+          <span>or</span>
+        </div>
+        <button class="btn btn-outline btn-full social-btn">
+          <i class="fab fa-google"></i> Continue with Google
+        </button>
+      </div>
+      
+      <!-- Signup Form -->
+      <div id="signup-form" class="auth-form">
+        <h2>Create an Account</h2>
+        <div class="form-group">
+          <label for="signup-name">Full Name</label>
+          <input type="text" id="signup-name" placeholder="Enter your full name">
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Email</label>
+          <input type="email" id="signup-email" placeholder="Enter your email">
+        </div>
+        <div class="form-group">
+          <label for="signup-password">Password</label>
+          <input type="password" id="signup-password" placeholder="Create a password">
+        </div>
+        <div class="form-group">
+          <label for="signup-confirm-password">Confirm Password</label>
+          <input type="password" id="signup-confirm-password" placeholder="Confirm your password">
+        </div>
+        <button id="signup-submit" class="btn btn-primary btn-full">Sign Up</button>
+        <div class="auth-divider">
+          <span>or</span>
+        </div>
+        <button class="btn btn-outline btn-full social-btn">
+          <i class="fab fa-google"></i> Continue with Google
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create images directory placeholder -->
+  <div style="display: none;" id="image-placeholder"></div>
+
+  <!-- JavaScript -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Modal functionality
+      const modal = document.getElementById('auth-modal');
+      const loginBtn = document.getElementById('login-btn');
+      const signupBtn = document.getElementById('signup-btn');
+      const heroSignupBtn = document.getElementById('hero-signup-btn');
+      const ctaSignupBtn = document.getElementById('cta-signup-btn');
+      const closeModal = document.querySelector('.close-modal');
+      const authTabs = document.querySelectorAll('.auth-tab');
+      const authForms = document.querySelectorAll('.auth-form');
+      
+      // Open modal with login form
+      loginBtn.addEventListener('click', function() {
+        modal.style.display = 'flex';
+        showAuthForm('login');
+      });
+      
+      // Open modal with signup form
+      signupBtn.addEventListener('click', function() {
+        modal.style.display = 'flex';
+        showAuthForm('signup');
+      });
+      
+      // Hero and CTA signup buttons
+      heroSignupBtn.addEventListener('click', function() {
+        modal.style.display = 'flex';
+        showAuthForm('signup');
+      });
+      
+      ctaSignupBtn.addEventListener('click', function() {
+        modal.style.display = 'flex';
+        showAuthForm('signup');
+      });
+      
+      // Close modal
+      closeModal.addEventListener('click', function() {
+        modal.style.display = 'none';
+      });
+      
+      // Close modal when clicking outside
+      window.addEventListener('click', function(event) {
+        if (event.target === modal) {
+          modal.style.display = 'none';
+        }
+      });
+      
+      // Tab switching
+      authTabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+          const tabName = this.getAttribute('data-tab');
+          showAuthForm(tabName);
+        });
+      });
+      
+      function showAuthForm(formName) {
+        // Update active tab
+        authTabs.forEach(tab => {
+          if (tab.getAttribute('data-tab') === formName) {
+            tab.classList.add('active');
+          } else {
+            tab.classList.remove('active');
+          }
+        });
+        
+        // Show selected form
+        authForms.forEach(form => {
+          if (form.id === formName + '-form') {
+            form.classList.add('active');
+          } else {
+            form.classList.remove('active');
+          }
+        });
+      }
+      
+      // Testimonial slider
+      const dots = document.querySelectorAll('.dot');
+      const testimonials = document.querySelectorAll('.testimonial');
+      let currentTestimonial = 0;
+      
+      function showTestimonial(index) {
+        testimonials.forEach((testimonial, i) => {
+          testimonial.style.display = i === index ? 'block' : 'none';
+        });
+        
+        dots.forEach((dot, i) => {
+          dot.classList.toggle('active', i === index);
+        });
+      }
+      
+      // Initialize testimonials
+      showTestimonial(currentTestimonial);
+      
+      // Dot navigation
+      dots.forEach((dot, i) => {
+        dot.addEventListener('click', () => {
+          currentTestimonial = i;
+          showTestimonial(currentTestimonial);
+        });
+      });
+      
+      // Auto-rotate testimonials
+      setInterval(() => {
+        currentTestimonial = (currentTestimonial + 1) % testimonials.length;
+        showTestimonial(currentTestimonial);
+      }, 5000);
+      
+      // Mobile menu toggle
+      const menuToggle = document.querySelector('.menu-toggle');
+      const navLinks = document.querySelector('.nav-links');
+      
+      menuToggle.addEventListener('click', function() {
+        navLinks.classList.toggle('active');
+      });
+      
+      // Form submission handlers
+      const loginSubmit = document.getElementById('login-submit');
+      const signupSubmit = document.getElementById('signup-submit');
+      
+      loginSubmit.addEventListener('click', function(e) {
+        e.preventDefault();
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
+        
+        if (!email || !password) {
+          alert('Please enter both email and password');
+          return;
+        }
+        
+        // Here you would typically make an API call to your authentication service
+        // For demonstration, we'll simulate a successful login
+        simulateLogin(email, password);
+      });
+      
+      signupSubmit.addEventListener('click', function(e) {
+        e.preventDefault();
+        const name = document.getElementById('signup-name').value;
+        const email = document.getElementById('signup-email').value;
+        const password = document.getElementById('signup-password').value;
+        const confirmPassword = document.getElementById('signup-confirm-password').value;
+        
+        if (!name || !email || !password || !confirmPassword) {
+          alert('Please fill in all fields');
+          return;
+        }
+        
+        if (password !== confirmPassword) {
+          alert('Passwords do not match');
+          return;
+        }
+        
+        // Here you would typically make an API call to your authentication service
+        // For demonstration, we'll simulate a successful signup
+        simulateSignup(name, email, password);
+      });
+      
+      // Simulated authentication functions
+      function simulateLogin(email, password) {
+        // Simulate API call delay
+        setTimeout(() => {
+          // Redirect to Stripe payment page after successful login
+          redirectToStripePayment();
+        }, 1000);
+      }
+      
+      function simulateSignup(name, email, password) {
+        // Simulate API call delay
+        setTimeout(() => {
+          // Redirect to Stripe payment page after successful signup
+          redirectToStripePayment();
+        }, 1000);
+      }
+      
+      function redirectToStripePayment() {
+        // Replace this URL with your actual Stripe payment link
+        window.location.href = 'https://buy.stripe.com/your-product-link';
+      }
+    });
+  </script>
+</body>
+</html>

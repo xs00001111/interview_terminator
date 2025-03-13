@@ -1,0 +1,9 @@
+This directory is for storing landing page images.
+
+Recommended images to add:
+- hero-image.png: A screenshot or mockup of the Conversation Helper application in use
+- testimonial-1.jpg: Profile image for Sarah Johnson testimonial
+- testimonial-2.jpg: Profile image for David Chen testimonial
+- testimonial-3.jpg: Profile image for Dr. Emily Rodriguez testimonial
+
+You can replace this file with actual images when they're available.
