@@ -225,7 +225,7 @@ async function generateDocumentSummary() {
       } else if (AI_PROVIDER === 'openai') {
         // Extract structured content from the document using OpenAI
         const extractResult = await openai.chat.completions.create({
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o',
           messages: [
             { role: 'system', content: 'You are a helpful assistant.' },
             { role: 'user', content: `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${rawFileContent}` }
@@ -236,7 +236,7 @@ async function generateDocumentSummary() {
         
         // Generate summary for text content
         const result = await openai.chat.completions.create({
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o',
           messages: [
             { role: 'system', content: 'You are a helpful assistant.' },
             { role: 'user', content: `Summarize this document in 3-5 sentences:\n\n${rawFileContent}` }
@@ -540,7 +540,7 @@ const speechCallback = stream => {
             
             // Create a streaming completion
             const stream = await openai.chat.completions.create({
-              model: 'gpt-3.5-turbo',
+              model: 'gpt-4o',
               messages: messages,
               stream: true,
               temperature: 0.3,
@@ -982,7 +982,7 @@ async function generateGeminiResponse(transcript) {
         
         // Create a streaming completion
         const stream = await openai.chat.completions.create({
-          model: 'gpt-3.5-turbo',
+          model: 'gpt-4o',
           messages: messages,
           stream: true,
           temperature: 0.3,
