@@ -62,6 +62,7 @@ const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature:
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
+});
 
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
