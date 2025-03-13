@@ -433,6 +433,9 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('transcript', message.data);
     } else if (message.type === 'suggestion' && mainWindow) {
       mainWindow.webContents.send('suggestion', message.data);
+    } else if (message.type === 'suggestion-chunk' && mainWindow) {
+      // Handle streaming chunks from OpenAI
+      mainWindow.webContents.send('suggestion-chunk', message.data);
     } else if (message.type === 'recording-status' && mainWindow) {
       mainWindow.webContents.send('recording-status', message.data);
     } else if (message.type === 'context-update' && mainWindow) {

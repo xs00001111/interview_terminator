@@ -24,6 +24,7 @@
     "fs": "^0.0.1-security",
     "google-gax": "^4.4.1",
     "node-record-lpcm16": "^1.0.1",
+    "openai": "^4.87.3",
     "yargs": "^17.7.2"
   },
   "devDependencies": {

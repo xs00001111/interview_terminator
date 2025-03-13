@@ -9,6 +9,7 @@ const {Writable} = require('stream');
 const recorder = require('node-record-lpcm16');
 const {GoogleAuth, grpc} = require('google-gax');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { OpenAI } = require('openai');
 const fs = require('fs');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
@@ -50,8 +51,18 @@ function getApiKeyCredentials() {
 const sslCreds = getApiKeyCredentials();
 
 const client = new speech.SpeechClient({sslCreds});
+
+// AI provider configuration
+const AI_PROVIDER = 'openai'; // Set to 'openai' or 'gemini'
+
+// Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+
 let chatHistory = [];
 let lastGeminiGenerationTime = 0;
 const GEMINI_DEBOUNCE_DELAY = 1000; // 1 second in milliseconds (reduced from 2s to improve responsiveness)
@@ -199,17 +210,41 @@ async function generateDocumentSummary() {
       const rawFileContent = fs.readFileSync(filePath, 'utf8');
       console.log(chalk.green(`Loaded text context file: ${filePath}`));
       
-      // Extract structured content from the document
-      const extractResult = await model.generateContent([
-        `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${rawFileContent}`
-      ]);
-      extractedContent = extractResult.response.text();
-      
-      // Generate summary for text content
-      const result = await model.generateContent([
-        `Summarize this document in 3-5 sentences:\n\n${rawFileContent}`
-      ]);
-      documentSummary = result.response.text();
+      if (AI_PROVIDER === 'gemini') {
+        // Extract structured content from the document using Gemini
+        const extractResult = await model.generateContent([
+          `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${rawFileContent}`
+        ]);
+        extractedContent = extractResult.response.text();
+        
+        // Generate summary for text content
+        const result = await model.generateContent([
+          `Summarize this document in 3-5 sentences:\n\n${rawFileContent}`
+        ]);
+        documentSummary = result.response.text();
+      } else if (AI_PROVIDER === 'openai') {
+        // Extract structured content from the document using OpenAI
+        const extractResult = await openai.chat.completions.create({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant.' },
+            { role: 'user', content: `Read the following document and extract the key information in a structured format that can be used as context for a conversation:\n\n${rawFileContent}` }
+          ],
+          temperature: 0.3,
+        });
+        extractedContent = extractResult.choices[0].message.content;
+        
+        // Generate summary for text content
+        const result = await openai.chat.completions.create({
+          model: 'gpt-3.5-turbo',
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant.' },
+            { role: 'user', content: `Summarize this document in 3-5 sentences:\n\n${rawFileContent}` }
+          ],
+          temperature: 0.3,
+        });
+        documentSummary = result.choices[0].message.content;
+      }
       
       // Use the extracted content instead of raw file content
       fileContext = extractedContent;
@@ -227,32 +262,33 @@ async function generateDocumentSummary() {
       };
       console.log(chalk.green(`Loaded binary context file: ${filePath} as ${mimeType}`));
       
-      // Extract structured content from the document
-      const extractResult = await model.generateContent([
-        fileContentPart,
-        'Read this document and extract the key information in a structured format that can be used as context for a conversation'
-      ]);
-      extractedContent = extractResult.response.text();
-      
-      // Generate summary for binary content
-      const result = await model.generateContent([
-        fileContentPart,
-        'Summarize this document in 3-5 sentences'
-      ]);
-      documentSummary = result.response.text();
+      if (AI_PROVIDER === 'gemini') {
+        // Extract structured content from the document using Gemini
+        const extractResult = await model.generateContent([
+          fileContentPart,
+          'Read this document and extract the key information in a structured format that can be used as context for a conversation'
+        ]);
+        extractedContent = extractResult.response.text();
+        
+        // Generate summary for binary content
+        const result = await model.generateContent([
+          fileContentPart,
+          'Summarize this document in 3-5 sentences'
+        ]);
+        documentSummary = result.response.text();
+      } else if (AI_PROVIDER === 'openai') {
+        // For OpenAI, we can't directly process binary files, so we'll need to extract text first
+        // This is a simplified approach - in a real app, you might want to use a document processing service
+        console.log(chalk.yellow('Binary file processing with OpenAI is limited. Using basic text extraction.'));
+        
+        // For simplicity, we'll just use a placeholder message
+        extractedContent = 'Binary document content (OpenAI cannot directly process binary files)';
+        documentSummary = 'Binary document (OpenAI cannot directly process binary files)';
+      }
       
       // Store the extracted content as text for use in chat
       fileContext = extractedContent;
     }
-    
-    // Display the summary and extracted content
-    // console.log(chalk.cyan('\n===== DOCUMENT SUMMARY ====='));
-    // console.log(chalk.cyan(documentSummary));
-    // console.log(chalk.cyan('============================\n'));
-    
-    // console.log(chalk.yellow('\n===== EXTRACTED CONTENT ====='));
-    // console.log(chalk.yellow(extractedContent.substring(0, 300) + (extractedContent.length > 300 ? '...' : '')));
-    // console.log(chalk.yellow('==============================\n'));
     
     // Initialize chat with the new context
     await initializeChat();
@@ -265,46 +301,60 @@ async function generateDocumentSummary() {
 
 // Initialize chat after summary generation
 async function initializeChat() {
-  // Create chat configuration with system instruction as text only
-  const chatConfig = {
-    history: chatHistory,
-    temprature: 0.2,
-    systemInstruction: {
-      role: "system",
-      parts: [{ 
-        text: systemPrompt + (fileContext ? "\nUse the provided resume or personal introduction document to craft responses that match the user's background, experiences, and qualifications. When answering questions, reference specific details from their resume/introduction when appropriate." : "\nUse the previous conversation responses to maintain a consistent personality and background knowledge throughout the conversation.")
-      }]
+  if (AI_PROVIDER === 'gemini') {
+    // Create chat configuration with system instruction as text only
+    const chatConfig = {
+      history: chatHistory,
+      temprature: 0.2,
+      systemInstruction: {
+        role: "system",
+        parts: [{ 
+          text: systemPrompt + (fileContext ? "\nUse the provided resume or personal introduction document to craft responses that match the user's background, experiences, and qualifications. When answering questions, reference specific details from their resume/introduction when appropriate." : "\nUse the previous conversation responses to maintain a consistent personality and background knowledge throughout the conversation.")
+        }]
+      }
+    };
+
+    // If we have a binary file content, add it to the history instead of system instruction
+    if (fileContentPart) {
+      chatConfig.history = [
+        {
+          role: "user",
+          parts: [fileContentPart, { text: "Use this document as context for our conversation." }]
+        },
+        {
+          role: "model",
+          parts: [{ text: "I'll use this document as context for our conversation." }]
+        }
+      ];
+    } else if (fileContext) {
+      // If we have text context, add it to the history
+      chatConfig.history = [
+        {
+          role: "user",
+          parts: [{ text: `Here's the document content to use as context:\n\n${fileContext}` }]
+        },
+        {
+          role: "model",
+          parts: [{ text: "I'll use this document content as context for our conversation." }]
+        }
+      ];
     }
-  };
 
-  // If we have a binary file content, add it to the history instead of system instruction
-  if (fileContentPart) {
-    chatConfig.history = [
-      {
-        role: "user",
-        parts: [fileContentPart, { text: "Use this document as context for our conversation." }]
-      },
-      {
-        role: "model",
-        parts: [{ text: "I'll use this document as context for our conversation." }]
-      }
-    ];
-  } else if (fileContext) {
-    // If we have text context, add it to the history
-    chatConfig.history = [
-      {
-        role: "user",
-        parts: [{ text: `Here's the document content to use as context:\n\n${fileContext}` }]
-      },
-      {
-        role: "model",
-        parts: [{ text: "I'll use this document content as context for our conversation." }]
-      }
-    ];
+    // Initialize the chat with the configuration
+    chat = model.startChat(chatConfig);
+  } else if (AI_PROVIDER === 'openai') {
+    // For OpenAI, we don't need to initialize a chat session in the same way
+    // We'll handle messages directly when sending them
+    chatHistory = [];
+    
+    // If we have context, add it to the chat history
+    if (fileContext) {
+      chatHistory.push(
+        { role: "user", content: `Here's the document content to use as context:\n\n${fileContext}` },
+        { role: "assistant", content: "I'll use this document content as context for our conversation." }
+      );
+    }
   }
-
-  // Initialize the chat with the configuration
-  chat = model.startChat(chatConfig);
 }
 
 // Initialize chat with default configuration
@@ -312,15 +362,19 @@ async function initializeChat() {
 // Read system prompt from file
 const systemPrompt = fs.readFileSync('system_prompt.txt', 'utf8');
 
-let chat = model.startChat({
-  history: [],
-  systemInstruction: {
-    role: "system",
-    parts: [{ 
-      text: systemPrompt
-    }]
-  }
-});
+// Initialize chat based on selected AI provider
+let chat;
+if (AI_PROVIDER === 'gemini') {
+  chat = model.startChat({
+    history: [],
+    systemInstruction: {
+      role: "system",
+      parts: [{ 
+        text: systemPrompt
+      }]
+    }
+  });
+}
 
 // Initialize chat properly after startup
 initializeChat();
@@ -446,33 +500,78 @@ const speechCallback = stream => {
     // If not pinned and enough time has passed, generate new suggestion
     else if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
       lastGeminiGenerationTime = currentTime;
-      chat.sendMessageStream(userMessage, {
-        timeout: 30000 // Add timeout to prevent hanging requests
-      })
-      .then(async (result) => {
-        let fullResponse = '';
-        for await (const chunk of result.stream) {
-          fullResponse += chunk.text();
-          // Remove console logging to improve performance
-        }
-        
-        // Send AI suggestion to the Electron frontend via IPC without logging
-        process.send({ type: 'suggestion', data: { text: fullResponse } });
-        
-        // Update chat history
-        chat = model.startChat({
-          history: [
-            ...chatHistory
-          ]
-        });
-        chatHistory.push(
-          { role: 'user', parts: [{ text: userMessage }] },
-          { role: 'model', parts: [{ text: fullResponse }] }
-        );
-      }); // Added missing closing bracket
       
-    isFinalEndTime = resultEndTime;
-    lastTranscriptWasFinal = true;
+      if (AI_PROVIDER === 'gemini') {
+        // Use Gemini for response generation
+        chat.sendMessageStream(userMessage, {
+          timeout: 30000 // Add timeout to prevent hanging requests
+        })
+        .then(async (result) => {
+          let fullResponse = '';
+          for await (const chunk of result.stream) {
+            fullResponse += chunk.text();
+            // Remove console logging to improve performance
+          }
+          
+          // Send AI suggestion to the Electron frontend via IPC without logging
+          process.send({ type: 'suggestion', data: { text: fullResponse } });
+          
+          // Update chat history
+          chat = model.startChat({
+            history: [
+              ...chatHistory
+            ]
+          });
+          chatHistory.push(
+            { role: 'user', parts: [{ text: userMessage }] },
+            { role: 'model', parts: [{ text: fullResponse }] }
+          );
+        });
+      } else if (AI_PROVIDER === 'openai') {
+        // Use OpenAI for response generation
+        (async () => {
+          try {
+            // Prepare messages for OpenAI
+            const messages = [
+              { role: 'system', content: systemPrompt },
+              ...chatHistory,
+              { role: 'user', content: userMessage }
+            ];
+            
+            // Create a streaming completion
+            const stream = await openai.chat.completions.create({
+              model: 'gpt-3.5-turbo',
+              messages: messages,
+              stream: true,
+              temperature: 0.3,
+            });
+            
+            let fullResponse = '';
+            
+            // Process the stream
+            for await (const chunk of stream) {
+              const content = chunk.choices[0]?.delta?.content || '';
+              fullResponse += content;
+            }
+            
+            // Send AI suggestion to the Electron frontend
+            process.send({ type: 'suggestion', data: { text: fullResponse } });
+            
+            // Update chat history
+            chatHistory.push(
+              { role: 'user', content: userMessage },
+              { role: 'assistant', content: fullResponse }
+            );
+          } catch (error) {
+            console.error(chalk.red(`OpenAI API error: ${error.message}`));
+            process.send({ type: 'error', data: { message: `OpenAI API error: ${error.message}` } });
+          }
+        })();
+      }
+      
+      isFinalEndTime = resultEndTime;
+      lastTranscriptWasFinal = true;
+    }
   } else {
     // Make sure transcript does not exceed console character length
     if (stdoutText.length > process.stdout.columns) {
@@ -497,7 +596,7 @@ const speechCallback = stream => {
       });
     }
   }
-}};
+};
 
 const audioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
@@ -846,30 +945,93 @@ async function generateGeminiResponse(transcript) {
     return;
   }
   lastGeminiGenerationTime = now;
-  chat.sendMessageStream(userMessage)
-  .then(async (result) => {
-    let fullResponse = '';
-    for await (const chunk of result.stream) {
-      fullResponse += chunk.text();
-      process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
-    }
-    
-    // Send AI suggestion to the Electron frontend via IPC
-    console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
-    process.send({ type: 'suggestion', data: { text: fullResponse } });
-    
-    // Update chat history
-    chat = model.startChat({
-      history: [
-        ...chatHistory
-      ]
-    });
-    chatHistory.push(
-      { role: 'user', parts: [{ text: userMessage }] },
-      { role: 'model', parts: [{ text: fullResponse }] }
-    );
-  }); // Added missing closing bracket
   
-isFinalEndTime = resultEndTime;
-lastTranscriptWasFinal = true;
-}
+  if (AI_PROVIDER === 'gemini') {
+    chat.sendMessageStream(transcript)
+    .then(async (result) => {
+      let fullResponse = '';
+      for await (const chunk of result.stream) {
+        fullResponse += chunk.text();
+        process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
+      }
+      
+      // Send AI suggestion to the Electron frontend via IPC
+      console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
+      process.send({ type: 'suggestion', data: { text: fullResponse } });
+      
+      // Update chat history
+      chat = model.startChat({
+        history: [
+          ...chatHistory
+        ]
+      });
+      chatHistory.push(
+        { role: 'user', parts: [{ text: transcript }] },
+        { role: 'model', parts: [{ text: fullResponse }] }
+      );
+    });
+  } else if (AI_PROVIDER === 'openai') {
+    (async () => {
+      try {
+        // Prepare messages for OpenAI
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...chatHistory,
+          { role: 'user', content: transcript }
+        ];
+        
+        // Create a streaming completion
+        const stream = await openai.chat.completions.create({
+          model: 'gpt-3.5-turbo',
+          messages: messages,
+          stream: true,
+          temperature: 0.3,
+        });
+        
+        let fullResponse = '';
+        
+        // Process the stream and send each chunk to the frontend
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            process.stdout.write(chalk.blue(`\n[AI Suggestion] ${content}`));
+            
+            // Send each chunk to the frontend as it arrives
+            process.send({ 
+              type: 'suggestion-chunk', 
+              data: { 
+                text: content,
+                fullText: fullResponse,
+                isFinal: false
+              } 
+            });
+          }
+        }
+        
+        // Send the final complete response
+        console.log('[SERVER] Sending final suggestion via IPC:', fullResponse);
+        process.send({ 
+          type: 'suggestion', 
+          data: { 
+            text: fullResponse,
+            isFinal: true 
+          } 
+        });
+        
+        // Update chat history
+        chatHistory.push(
+          { role: 'user', content: transcript },
+          { role: 'assistant', content: fullResponse }
+        );
+      } catch (error) {
+        console.error(chalk.red(`OpenAI API error: ${error.message}`));
+        process.send({ type: 'error', data: { message: `OpenAI API error: ${error.message}` } });
+      }
+    })();}
+    isFinalEndTime = resultEndTime;
+    lastTranscriptWasFinal = true;
+  }
+
+  
+

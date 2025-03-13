@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Event listeners
   onTranscript: (callback) => ipcRenderer.on('transcript', (_, data) => callback(data)),
   onSuggestion: (callback) => ipcRenderer.on('suggestion', (_, data) => callback(data)),
+  onSuggestionChunk: (callback) => ipcRenderer.on('suggestion-chunk', (_, data) => callback(data)),
   onRecordingStatus: (callback) => ipcRenderer.on('recording-status', (_, data) => callback(data)),
   onContextUpdate: (callback) => ipcRenderer.on('context-update', (_, data) => callback(data)),
   onError: (callback) => ipcRenderer.on('error', (_, data) => callback(data)),

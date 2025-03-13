@@ -767,7 +767,59 @@
     window.electron.onSuggestion((data) => {
       console.log('[DEBUG] Received suggestion:', data);
       if (data.text && data.text.trim()) {
+        // For final messages (non-streaming or final streaming message)
         addAIMessage(data.text);
+      }
+    });
+    
+    // Handle streaming suggestion chunks
+    let currentStreamingMessage = null;
+    let streamingMessageContent = '';
+    
+    window.electron.onSuggestionChunk((data) => {
+      console.log('[DEBUG] Received suggestion chunk:', data);
+      if (data.text) {
+        // If this is the first chunk, create a new message
+        if (!currentStreamingMessage) {
+          // Remove any existing non-pinned AI messages
+          const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
+          aiMessages.forEach(msg => conversationArea.removeChild(msg));
+          
+          // Create a new message for streaming content
+          currentStreamingMessage = document.createElement('div');
+          currentStreamingMessage.className = 'message welcome-message';
+          currentStreamingMessage.setAttribute('data-last-ai', 'true');
+          
+          // Add message label
+          const messageLabel = document.createElement('div');
+          messageLabel.className = 'message-label';
+          messageLabel.textContent = 'AI';
+          currentStreamingMessage.appendChild(messageLabel);
+          
+          // Add message text container
+          const messageText = document.createElement('div');
+          messageText.className = 'formatted-content';
+          currentStreamingMessage.appendChild(messageText);
+          
+          // Add to conversation
+          conversationArea.appendChild(currentStreamingMessage);
+          streamingMessageContent = '';
+        }
+        
+        // Append the new chunk to the content
+        streamingMessageContent += data.text;
+        
+        // Update the message content with formatting
+        const contentDiv = currentStreamingMessage.querySelector('.formatted-content');
+        contentDiv.innerHTML = formatStructuredContent(streamingMessageContent);
+        
+        // Scroll to the bottom
+        container.scrollTop = container.scrollHeight;
+        
+        // If this is the final chunk, reset the streaming message reference
+        if (data.isFinal) {
+          currentStreamingMessage = null;
+        }
       }
     });
     
