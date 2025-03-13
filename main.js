@@ -3,12 +3,27 @@ const path = require('path');
 const { fork } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const { createClient } = require('@supabase/supabase-js');
+const dotenv = require('dotenv');
+
+// Load environment variables
+dotenv.config();
+
+// Supabase configuration
+const supabaseUrl = process.env.SUPABASE_URL || 'https://aqhcipqqdtchivmbxrap.supabase.co';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxaGNpcHFxZHRjaGl2bWJ4cmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NzE0NDUsImV4cCI6MjA1NzM0NzQ0NX0.ABSLZyrZ-8LojAriQKlJALmsgChKagrPLXzVabf559Q';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Authentication state
+let session = null;
+let apiKeys = null;
 
 // Global reference to the server process
 let serverProcess;
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow;
+let loginWindow;
 
 // Track window visibility state
 let isWindowVisible = true;
@@ -23,6 +38,152 @@ let windowState = {
 const screenshotDir = path.join(os.tmpdir(), 'app-screenshots');
 if (!fs.existsSync(screenshotDir)) {
   fs.mkdirSync(screenshotDir, { recursive: true });
+}
+
+// Create login window
+function createLoginWindow() {
+  loginWindow = new BrowserWindow({
+    width: 400,
+    height: 600,
+    frame: false,
+    transparent: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    resizable: false,
+    show: false
+  });
+  
+  loginWindow.loadFile('login.html');
+  
+  loginWindow.once('ready-to-show', () => {
+    loginWindow.show();
+  });
+  
+  loginWindow.on('closed', () => {
+    loginWindow = null;
+  });
+}
+
+// Create main application window
+function createMainWindow() {
+  // Get the primary display dimensions
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+  
+  mainWindow = new BrowserWindow({
+    width: 500,
+    height: 400,
+    x: Math.floor(width / 2 - 250),
+    y: Math.floor(height - 450),
+    frame: false,
+    transparent: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    resizable: true,
+    show: false
+  });
+  
+  mainWindow.loadFile('index.html');
+  
+  // Only open dev tools in development mode
+  if (process.env.NODE_ENV === 'development') {
+    // mainWindow.webContents.openDevTools();
+  }
+  
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+  
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    if (serverProcess) {
+      serverProcess.kill();
+      serverProcess = null;
+    }
+  });
+  
+  // Start the server process
+  startServerProcess();
+}
+
+// Fetch API keys from Supabase for the authenticated user
+async function fetchApiKeys(userId) {
+  try {
+    const { data, error } = await supabase
+      .from('api_keys')
+      .select('google_speech_key, google_gemini_key')
+      .eq('user_id', userId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching API keys:', error.message);
+      return null;
+    }
+    
+    if (!data) {
+      console.error('No API keys found for user');
+      return null;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Exception fetching API keys:', error.message);
+    return null;
+  }
+}
+
+// Start the server process with the appropriate API keys
+function startServerProcess() {
+  // Set environment variables for the server process
+  const env = { ...process.env };
+  
+  // If we have API keys from authentication, use those
+  if (apiKeys) {
+    env.GOOGLE_SPEECH_API_KEY = apiKeys.google_speech_key;
+    env.GOOGLE_GEMINI_API_KEY = apiKeys.google_gemini_key;
+  }
+  
+  // Start the server as a child process
+  serverProcess = fork(path.join(__dirname, 'server.js'), [], {
+    env: env,
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+  });
+  
+  // Handle messages from the server process
+  serverProcess.on('message', (message) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(message.type, message.data);
+    }
+  });
+  
+  // Handle server process exit
+  serverProcess.on('exit', (code) => {
+    console.log(`Server process exited with code ${code}`);
+    serverProcess = null;
+  });
+  
+  // Handle server process errors
+  serverProcess.on('error', (err) => {
+    console.error('Server process error:', err);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('error', { message: `Server error: ${err.message}` });
+    }
+  });
+  
+  // Log server output for debugging
+  serverProcess.stdout.on('data', (data) => {
+    console.log(`Server: ${data}`);
+  });
+  
+  serverProcess.stderr.on('data', (data) => {
+    console.error(`Server error: ${data}`);
+  });
 }
 
 // Function to take a screenshot
@@ -360,8 +521,143 @@ function createWindow() {
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+// Handle IPC messages for authentication
+ipcMain.on('login', async (event, { email, password }) => {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    
+    if (error) {
+      if (loginWindow) {
+        loginWindow.webContents.send('auth-error', { message: error.message });
+      }
+      return;
+    }
+    
+    // Store the session
+    session = data.session;
+    
+    // Fetch API keys for the authenticated user
+    apiKeys = await fetchApiKeys(data.user.id);
+    
+    if (!apiKeys) {
+      if (loginWindow) {
+        loginWindow.webContents.send('auth-error', { message: 'No API keys found for your account. Please contact support.' });
+      }
+      return;
+    }
+    
+    // Notify the renderer process of successful login
+    if (loginWindow) {
+      loginWindow.webContents.send('auth-success', { message: 'Login successful!' });
+    }
+    
+    // Close the login window and open the main window
+    setTimeout(() => {
+      if (loginWindow) {
+        loginWindow.close();
+      }
+      createMainWindow();
+    }, 1000);
+  } catch (error) {
+    console.error('Login error:', error);
+    if (loginWindow) {
+      loginWindow.webContents.send('auth-error', { message: 'An unexpected error occurred. Please try again.' });
+    }
+  }
+});
+
+ipcMain.on('signup', async (event, { email, password }) => {
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password
+    });
+    
+    if (error) {
+      if (loginWindow) {
+        loginWindow.webContents.send('signup-error', { message: error.message });
+      }
+      return;
+    }
+    
+    // Notify the renderer process of successful signup
+    if (loginWindow) {
+      loginWindow.webContents.send('signup-success', { message: 'Account created successfully! Please check your email for verification.' });
+    }
+  } catch (error) {
+    console.error('Signup error:', error);
+    if (loginWindow) {
+      loginWindow.webContents.send('signup-error', { message: 'An unexpected error occurred. Please try again.' });
+    }
+  }
+});
+
+ipcMain.on('reset-password', async (event, { email }) => {
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: 'app://reset-password'
+    });
+    
+    if (error) {
+      if (loginWindow) {
+        loginWindow.webContents.send('reset-error', { message: error.message });
+      }
+      return;
+    }
+    
+    // Notify the renderer process of successful reset request
+    if (loginWindow) {
+      loginWindow.webContents.send('reset-success', { message: 'Password reset link sent to your email!' });
+    }
+  } catch (error) {
+    console.error('Reset password error:', error);
+    if (loginWindow) {
+      loginWindow.webContents.send('reset-error', { message: 'An unexpected error occurred. Please try again.' });
+    }
+  }
+});
+
+ipcMain.on('logout', async () => {
+  try {
+    await supabase.auth.signOut();
+    session = null;
+    apiKeys = null;
+    
+    // Close the main window and open the login window
+    if (mainWindow) {
+      mainWindow.close();
+    }
+    createLoginWindow();
+  } catch (error) {
+    console.error('Logout error:', error);
+  }
+});
+
+// Developer mode bypass
+ipcMain.on('dev-mode', () => {
+  console.log('Developer mode activated');
+  // Close the login window if it exists
+  if (loginWindow) {
+    loginWindow.close();
+  }
+  
+  // Set development API keys
+  apiKeys = {
+    google_speech_key: process.env.GOOGLE_SPEECH_API_KEY,
+    google_gemini_key: process.env.GOOGLE_GEMINI_API_KEY
+  };
+  
+  // Create the main window using createWindow instead of createMainWindow
+  // to ensure proper event listeners are registered
   createWindow();
+});
+
+app.whenReady().then(() => {
+  // Start with login window instead of main window
+  createLoginWindow();
   
   // Register keyboard shortcuts for window movement
   globalShortcut.register('CommandOrControl+Up', () => {

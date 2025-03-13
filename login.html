@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Login - Realtime Conversation Helper</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      -webkit-app-region: drag;
+      border-radius: 10px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    .container {
+      width: 350px;
+      padding: 20px;
+      background-color: rgba(40, 40, 40, 0.8);
+      border-radius: 10px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+      -webkit-app-region: no-drag;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+    }
+    
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      position: relative;
+      margin-right: 8px;
+    }
+    
+    .logo-circle {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #ff9500;
+      top: 2px;
+      left: 2px;
+    }
+    
+    .logo-square {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      background-color: #00c853;
+      bottom: 2px;
+      right: 2px;
+    }
+    
+    .logo-line {
+      position: absolute;
+      width: 16px;
+      height: 2px;
+      background-color: #3cc8ff;
+      transform: rotate(135deg);
+      top: 11px;
+      left: 5px;
+    }
+    
+    .title {
+      font-size: 18px;
+      font-weight: bold;
+    }
+    
+    .window-controls {
+      display: flex;
+      -webkit-app-region: no-drag;
+      gap: 8px;
+    }
+
+    .window-controls button {
+      width: 5px;
+      height: 15px;
+      border-radius: 3px;
+      border: none;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+      background-color: rgba(0, 0, 0, 0.7);
+    }
+
+    .window-controls button:hover {
+      background-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .window-controls button .fas {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.7);
+      transition: all 0.2s ease;
+    }
+
+    #minimize {
+      background-color: rgba(255, 189, 76, 0.2);
+    }
+
+    #minimize:hover {
+      background-color: rgba(255, 189, 76, 1);
+    }
+
+    #close {
+      background-color: rgba(255, 95, 87, 0.2);
+    }
+
+    #close:hover {
+      background-color: rgba(255, 95, 87, 1);
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+    }
+    
+    input {
+      width: 100%;
+      padding: 8px;
+      background-color: rgba(60, 60, 60, 0.7);
+      border: 1px solid rgba(100, 100, 100, 0.7);
+      border-radius: 4px;
+      color: white;
+      box-sizing: border-box;
+      -webkit-app-region: no-drag;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: #3cc8ff;
+    }
+    
+    button {
+      background-color: rgba(60, 60, 255, 0.7);
+      border: none;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      width: 100%;
+      margin-top: 5px;
+      transition: background-color 0.2s;
+    }
+    
+    button:hover {
+      background-color: rgba(80, 80, 255, 0.9);
+    }
+    
+    .auth-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    
+    .auth-buttons button {
+      flex: 1;
+    }
+    
+    .toggle-auth {
+      background-color: rgba(60, 60, 60, 0.7);
+    }
+    
+    .toggle-auth:hover {
+      background-color: rgba(80, 80, 80, 0.9);
+    }
+    
+    .dev-mode {
+      margin-top: 20px;
+      text-align: center;
+    }
+    
+    .dev-mode button {
+      background-color: rgba(100, 60, 60, 0.7);
+      width: auto;
+      font-size: 12px;
+      padding: 5px 10px;
+    }
+    
+    .dev-mode button:hover {
+      background-color: rgba(120, 60, 60, 0.9);
+    }
+    
+    .error-message {
+      color: #ff5757;
+      font-size: 12px;
+      margin-top: 5px;
+      display: none;
+    }
+    
+    .success-message {
+      color: #57ff57;
+      font-size: 12px;
+      margin-top: 5px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <div class="logo-circle"></div>
+          <div class="logo-square"></div>
+          <div class="logo-line"></div>
+        </div>
+        <div class="title">Conversation Helper</div>
+      </div>
+      <div class="window-controls">
+        <button id="minimize" title="Minimize">
+          <i class="fas fa-minus"></i>
+        </button>
+        <button id="close" title="Close">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    </div>
+    
+    <div id="login-form">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="Enter your email">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Enter your password">
+      </div>
+      <div class="error-message" id="error-message"></div>
+      <div class="success-message" id="success-message"></div>
+      <button id="login-button">Log In</button>
+      
+      <div class="auth-buttons">
+        <button id="signup-toggle" class="toggle-auth">Create Account</button>
+        <button id="reset-password" class="toggle-auth">Reset Password</button>
+      </div>
+    </div>
+    
+    <div id="signup-form" style="display: none;">
+      <div class="form-group">
+        <label for="signup-email">Email</label>
+        <input type="email" id="signup-email" placeholder="Enter your email">
+      </div>
+      <div class="form-group">
+        <label for="signup-password">Password</label>
+        <input type="password" id="signup-password" placeholder="Create a password">
+      </div>
+      <div class="form-group">
+        <label for="confirm-password">Confirm Password</label>
+        <input type="password" id="confirm-password" placeholder="Confirm your password">
+      </div>
+      <div class="error-message" id="signup-error-message"></div>
+      <div class="success-message" id="signup-success-message"></div>
+      <button id="signup-button">Sign Up</button>
+      
+      <div class="auth-buttons">
+        <button id="login-toggle" class="toggle-auth">Back to Login</button>
+      </div>
+    </div>
+    
+    <div id="reset-form" style="display: none;">
+      <div class="form-group">
+        <label for="reset-email">Email</label>
+        <input type="email" id="reset-email" placeholder="Enter your email">
+      </div>
+      <div class="error-message" id="reset-error-message"></div>
+      <div class="success-message" id="reset-success-message"></div>
+      <button id="send-reset-button">Send Reset Link</button>
+      
+      <div class="auth-buttons">
+        <button id="back-to-login" class="toggle-auth">Back to Login</button>
+      </div>
+    </div>
+    
+    <div class="dev-mode">
+      <button id="dev-mode-button">Developer Mode</button>
+    </div>
+  </div>
+  
+  <script>
+    // This will be replaced by preload.js functionality
+    document.getElementById('minimize').addEventListener('click', () => {
+      window.electron.minimize();
+    });
+    
+    document.getElementById('close').addEventListener('click', () => {
+      window.electron.close();
+    });
+    
+    // Toggle between login and signup forms
+    document.getElementById('signup-toggle').addEventListener('click', () => {
+      document.getElementById('login-form').style.display = 'none';
+      document.getElementById('signup-form').style.display = 'block';
+      document.getElementById('reset-form').style.display = 'none';
+    });
+    
+    document.getElementById('login-toggle').addEventListener('click', () => {
+      document.getElementById('login-form').style.display = 'block';
+      document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('reset-form').style.display = 'none';
+    });
+    
+    document.getElementById('reset-password').addEventListener('click', () => {
+      document.getElementById('login-form').style.display = 'none';
+      document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('reset-form').style.display = 'block';
+    });
+    
+    document.getElementById('back-to-login').addEventListener('click', () => {
+      document.getElementById('login-form').style.display = 'block';
+      document.getElementById('signup-form').style.display = 'none';
+      document.getElementById('reset-form').style.display = 'none';
+    });
+    
+    // Developer mode button
+    document.getElementById('dev-mode-button').addEventListener('click', () => {
+      window.electron.devMode();
+    });
+    
+    // Authentication functions will be implemented with Supabase
+    document.getElementById('login-button').addEventListener('click', () => {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      
+      if (!email || !password) {
+        showError('error-message', 'Please enter both email and password');
+        return;
+      }
+      
+      window.electron.login(email, password);
+    });
+    
+    document.getElementById('signup-button').addEventListener('click', () => {
+      const email = document.getElementById('signup-email').value;
+      const password = document.getElementById('signup-password').value;
+      const confirmPassword = document.getElementById('confirm-password').value;
+      
+      if (!email || !password || !confirmPassword) {
+        showError('signup-error-message', 'Please fill in all fields');
+        return;
+      }
+      
+      if (password !== confirmPassword) {
+        showError('signup-error-message', 'Passwords do not match');
+        return;
+      }
+      
+      window.electron.signup(email, password);
+    });
+    
+    document.getElementById('send-reset-button').addEventListener('click', () => {
+      const email = document.getElementById('reset-email').value;
+      
+      if (!email) {
+        showError('reset-error-message', 'Please enter your email');
+        return;
+      }
+      
+      window.electron.resetPassword(email);
+    });
+    
+    function showError(elementId, message) {
+      const errorElement = document.getElementById(elementId);
+      errorElement.textContent = message;
+      errorElement.style.display = 'block';
+      
+      // Hide after 5 seconds
+      setTimeout(() => {
+        errorElement.style.display = 'none';
+      }, 5000);
+    }
+    
+    function showSuccess(elementId, message) {
+      const successElement = document.getElementById(elementId);
+      successElement.textContent = message;
+      successElement.style.display = 'block';
+      
+      // Hide after 5 seconds
+      setTimeout(() => {
+        successElement.style.display = 'none';
+      }, 5000);
+    }
+    
+    // Listen for authentication events from the main process
+    window.electron.onAuthError((data) => {
+      showError('error-message', data.message);
+    });
+    
+    window.electron.onAuthSuccess((data) => {
+      showSuccess('success-message', data.message);
+      // The main process will handle redirecting to the main app
+    });
+    
+    window.electron.onSignupError((data) => {
+      showError('signup-error-message', data.message);
+    });
+    
+    window.electron.onSignupSuccess((data) => {
+      showSuccess('signup-success-message', data.message);
+      // Automatically switch to login form after successful signup
+      setTimeout(() => {
+        document.getElementById('login-form').style.display = 'block';
+        document.getElementById('signup-form').style.display = 'none';
+      }, 2000);
+    });
+    
+    window.electron.onResetError((data) => {
+      showError('reset-error-message', data.message);
+    });
+    
+    window.electron.onResetSuccess((data) => {
+      showSuccess('reset-success-message', data.message);
+      // Automatically switch to login form after successful reset request
+      setTimeout(() => {
+        document.getElementById('login-form').style.display = 'block';
+        document.getElementById('reset-form').style.display = 'none';
+      }, 2000);
+    });
+    
+    // Handle enter key press for login form
+    document.getElementById('password').addEventListener('keyup', (event) => {
+      if (event.key === 'Enter') {
+        document.getElementById('login-button').click();
+      }
+    });
+    
+    // Handle enter key press for signup form
+    document.getElementById('confirm-password').addEventListener('keyup', (event) => {
+      if (event.key === 'Enter') {
+        document.getElementById('signup-button').click();
+      }
+    });
+    
+    // Handle enter key press for reset form
+    document.getElementById('reset-email').addEventListener('keyup', (event) => {
+      if (event.key === 'Enter') {
+        document.getElementById('send-reset-button').click();
+      }
+    });
+  </script>
+</body>
+</html>

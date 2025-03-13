@@ -28,6 +28,13 @@ contextBridge.exposeInMainWorld('electron', {
   // File dialog
   openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
   
+  // Authentication methods
+  login: (email, password) => ipcRenderer.send('login', { email, password }),
+  signup: (email, password) => ipcRenderer.send('signup', { email, password }),
+  resetPassword: (email) => ipcRenderer.send('reset-password', { email }),
+  devMode: () => ipcRenderer.send('dev-mode'),
+  logout: () => ipcRenderer.send('logout'),
+  
   // Event listeners
   onTranscript: (callback) => ipcRenderer.on('transcript', (_, data) => callback(data)),
   onSuggestion: (callback) => ipcRenderer.on('suggestion', (_, data) => callback(data)),
@@ -36,6 +43,14 @@ contextBridge.exposeInMainWorld('electron', {
   onError: (callback) => ipcRenderer.on('error', (_, data) => callback(data)),
   onReady: (callback) => ipcRenderer.on('ready', (_, data) => callback(data)),
   onScreenshotTaken: (callback) => ipcRenderer.on('screenshot-taken', (_, data) => callback(data)),
+  
+  // Authentication event listeners
+  onAuthError: (callback) => ipcRenderer.on('auth-error', (_, data) => callback(data)),
+  onAuthSuccess: (callback) => ipcRenderer.on('auth-success', (_, data) => callback(data)),
+  onSignupError: (callback) => ipcRenderer.on('signup-error', (_, data) => callback(data)),
+  onSignupSuccess: (callback) => ipcRenderer.on('signup-success', (_, data) => callback(data)),
+  onResetError: (callback) => ipcRenderer.on('reset-error', (_, data) => callback(data)),
+  onResetSuccess: (callback) => ipcRenderer.on('reset-success', (_, data) => callback(data)),
   
   // Window size and position
   getCurrentWindowSize: () => {

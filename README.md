@@ -2,6 +2,25 @@
 
 A real-time speech transcription application that uses Google Speech-to-Text API for transcription and Google Gemini AI for generating contextual suggestions and AI chat capabilities based on the transcribed speech.
 
+## Production Setup
+### Authentication with Supabase
+
+This application uses Supabase for authentication and API key management. To set up:
+
+1. Create a Supabase account at [supabase.com](https://supabase.com)
+2. Create a new project
+3. Set up email authentication in the Auth section
+4. Create a table called `api_keys` with the following columns:
+   - `id` (uuid, primary key)
+   - `user_id` (uuid, foreign key to auth.users)
+   - `google_speech_key` (text)
+   - `google_gemini_key` (text)
+5. Add your API keys to the `.env` file:
+   ```
+   SUPABASE_URL=your_supabase_url
+   SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+
 ## Features
 
 - Real-time speech transcription using Google Speech-to-Text API
