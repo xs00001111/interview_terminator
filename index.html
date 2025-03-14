@@ -15,10 +15,6 @@
       -webkit-app-region: drag;
       border-radius: 10px;
       position: relative; /* Added for resize handles positioning */
-    }
-    
-    .screenshot-tip {
-      display: flex;
       align-items: center;
       justify-content: center;
       color: rgba(255, 255, 255, 0.7);
@@ -40,11 +36,75 @@
     .container {
       max-height: 90vh;
       display: flex;
-      flex-direction: column;
+      flex-direction: row; /* Changed to row for two-column layout */
       justify-content: flex-start;
       padding: 10px;
       overflow-y: auto;
       position: relative; /* Added for resize handles */
+    }
+    
+    .main-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      margin-right: 10px;
+    }
+    
+    .transcript-section {
+      width: 0; /* Initially collapsed */
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background-color: rgba(40, 40, 40, 0.7);
+      border-radius: 8px;
+      transition: width 0.3s ease;
+      position: relative;
+    }
+    
+    .transcript-section.expanded {
+      width: 300px;
+      padding: 10px;
+    }
+    
+    .transcript-toggle {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background-color: rgba(60, 60, 60, 0.7);
+      border: none;
+      color: white;
+      width: 20px;
+      height: 60px;
+      border-radius: 4px 0 0 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      -webkit-app-region: no-drag;
+    }
+    
+    .transcript-toggle.show-transcript {
+      right: 0;
+    }
+    
+    .transcript-toggle.hide-transcript {
+      left: 0;
+    }
+    
+    .transcript-content {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    
+    .transcript-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+      text-align: center;
+      padding-bottom: 5px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
     }
     
     .header {
@@ -535,44 +595,58 @@
     <div class="resize-handle resize-handle-e" id="resize-e"></div>
     <div class="resize-handle resize-handle-s" id="resize-s"></div>
     <div class="resize-handle resize-handle-se" id="resize-se"></div>
-    <div class="header">
-      <div class="header-top">
-        <div class="title">
-          <div class="logo">
-            <div class="logo-icon">
-              <div class="logo-circle"></div>
-              <div class="logo-square"></div>
-              <div class="logo-line"></div>
+    
+    <!-- Main content section -->
+    <div class="main-section">
+      <div class="header">
+        <div class="header-top">
+          <div class="title">
+            <div class="logo">
+              <div class="logo-icon">
+                <div class="logo-circle"></div>
+                <div class="logo-square"></div>
+                <div class="logo-line"></div>
+              </div>
+            </div>
+          </div>
+          <div class="window-controls">
+            <button id="minimize" title="Minimize (Command+B on Mac / Control+B on Windows)"><i class="fas fa-minus"></i></button>
+            <button id="close" title="Close (Command+Q on Mac / Control+Q on Windows)"><i class="fas fa-times"></i></button>
+          </div>
+        </div>
+        <div class="header-bottom">
+          <div class="conversation-area" id="conversation-area">
+            <!-- Conversation messages will be added here dynamically -->
+          </div>
+          <div class="controls">
+            <div class="recording-controls">
+              <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
+              <button id="toggle-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
+              <button id="take-screenshot" title="Take Screenshot (Command+H on Mac / Control+H on Windows)"><i class="fas fa-camera"></i></button>
+              <button id="toggle-transcript" title="Show Transcript"><i class="fas fa-chevron-right"></i></button>
             </div>
           </div>
         </div>
-        <div class="window-controls">
-          <button id="minimize" title="Minimize (Command+B on Mac / Control+B on Windows)"><i class="fas fa-minus"></i></button>
-          <button id="close" title="Close (Command+Q on Mac / Control+Q on Windows)"><i class="fas fa-times"></i></button>
-        </div>
       </div>
-      <div class="header-bottom">
-        <div class="conversation-area" id="conversation-area">
-          <!-- Conversation messages will be added here dynamically -->
-        </div>
-        <div class="controls">
-          <div class="recording-controls">
-            <button id="toggle-context" title="Add Context"><i class="fas fa-plus"></i></button>
-            <button id="toggle-recording" title="Start Recording"><i class="fas fa-microphone"></i></button>
-            <button id="take-screenshot" title="Take Screenshot (Command+H on Mac / Control+H on Windows)"><i class="fas fa-camera"></i></button>
-          </div>
+      
+      <div class="context-area" id="context-area">
+        <div class="context-title">Context</div>
+        <div class="context-content" id="context-content">No context provided yet.</div>
+        <div class="context-controls">
+          <input type="text" class="context-input" id="context-text" placeholder="Paste text for context..." -webkit-app-region="no-drag">
+          <button class="context-btn" id="set-text-context">Set</button>
+          <input type="file" id="file-input" class="file-input">
+          <button class="context-btn" id="upload-file">Upload File</button>
         </div>
       </div>
     </div>
     
-    <div class="context-area" id="context-area">
-      <div class="context-title">Context</div>
-      <div class="context-content" id="context-content">No context provided yet.</div>
-      <div class="context-controls">
-        <input type="text" class="context-input" id="context-text" placeholder="Paste text for context..." -webkit-app-region="no-drag">
-        <button class="context-btn" id="set-text-context">Set</button>
-        <input type="file" id="file-input" class="file-input">
-        <button class="context-btn" id="upload-file">Upload File</button>
+    <!-- Transcript section -->
+    <div class="transcript-section" id="transcript-section">
+      <button class="transcript-toggle hide-transcript" id="hide-transcript"><i class="fas fa-chevron-left"></i></button>
+      <div class="transcript-title">Transcript</div>
+      <div class="transcript-content" id="transcript-content">
+        <!-- Transcript messages will be added here dynamically -->
       </div>
     </div>
   </div>
@@ -703,63 +777,61 @@
     window.electron.onTranscript((data) => {
       console.log('[DEBUG] Received transcript:', data);
       if (data.text && data.text.trim()) {
-        // Check if we have speaker information
-        if (data.speakerInfo && data.speakerInfo.hasSpeakerInfo) {
-          addHumanMessageWithSpeakers(data.text, data.speakerInfo);
-        } else {
-          addHumanMessage(data.text);
-        }
+        // Add transcript to the transcript section
+        addTranscriptMessage(data.text, data.speakerInfo);
       }
     });
     
-    // Add a human message with speaker information
-    function addHumanMessageWithSpeakers(text, speakerInfo) {
-      // Keep pinned messages, remove others
-      const pinnedMessages = Array.from(conversationArea.querySelectorAll('.pinned-message'));
-      const nonPinnedMessages = Array.from(conversationArea.querySelectorAll('.message:not(.pinned-message):not(.welcome-message)'));
-      
-      // Remove non-pinned human messages only, preserve AI messages
-      nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
-      
+    // Add a transcript message to the transcript section
+    function addTranscriptMessage(text, speakerInfo) {
       // Create message container
       const messageDiv = document.createElement('div');
       messageDiv.className = 'message human-message';
       
-      // Add message label
-      const messageLabel = document.createElement('div');
-      messageLabel.className = 'message-label';
-      messageLabel.textContent = 'Conversation';
-      messageDiv.appendChild(messageLabel);
-      
-      // Add speaker sections
-      speakerInfo.speakers.forEach(speaker => {
-        const speakerDiv = document.createElement('div');
-        speakerDiv.className = 'speaker-section';
-        
-        const speakerLabel = document.createElement('span');
-        speakerLabel.className = 'speaker-label';
-        speakerLabel.textContent = `Speaker ${speaker.speakerTag}: `;
-        speakerLabel.style.fontWeight = 'bold';
-        speakerLabel.style.color = speaker.speakerTag === 1 ? '#3cc8ff' : '#ff9500';
-        
-        const speakerText = document.createElement('span');
-        speakerText.textContent = speaker.text;
-        
-        speakerDiv.appendChild(speakerLabel);
-        speakerDiv.appendChild(speakerText);
-        messageDiv.appendChild(speakerDiv);
-      });
-      
-      // Add to conversation
-      conversationArea.appendChild(messageDiv);
-      
-      // Scroll to the bottom if no messages are pinned
-      if (pinnedMessages.length === 0) {
-        container.scrollTop = container.scrollHeight;
+      // Add message content based on speaker info
+      if (speakerInfo && speakerInfo.hasSpeakerInfo) {
+        // Create structured content with speaker information
+        speakerInfo.segments.forEach(segment => {
+          const speakerSection = document.createElement('div');
+          speakerSection.className = 'speaker-section';
+          
+          const speakerLabel = document.createElement('span');
+          speakerLabel.className = 'speaker-label';
+          speakerLabel.textContent = `Speaker ${segment.speakerId}:`;
+          
+          const speakerText = document.createElement('span');
+          speakerText.textContent = segment.text;
+          
+          speakerSection.appendChild(speakerLabel);
+          speakerSection.appendChild(speakerText);
+          messageDiv.appendChild(speakerSection);
+        });
       } else {
-        // Otherwise scroll to the new message
-        messageDiv.scrollIntoView({ behavior: 'smooth' });
+        // Simple text without speaker information
+        const messageText = document.createElement('div');
+        messageText.textContent = text;
+        messageDiv.appendChild(messageText);
       }
+      
+      // Add to transcript section
+      transcriptContent.appendChild(messageDiv);
+      
+      // Auto-scroll to the bottom
+      transcriptContent.scrollTop = transcriptContent.scrollHeight;
+    }
+    
+    // Add a human message with speaker information
+    function addHumanMessageWithSpeakers(text, speakerInfo) {
+      // Function is now empty to prevent displaying human messages
+      console.log('[DEBUG] Human message with speakers suppressed:', text);
+      // No UI updates - human messages are not displayed
+    }
+    
+    // Add a human message to the conversation
+    function addHumanMessage(text) {
+      // Function is now empty to prevent displaying human messages
+      console.log('[DEBUG] Human message suppressed:', text);
+      // No UI updates - human messages are not displayed
     }
     
     // Handle incoming suggestion data
@@ -966,8 +1038,6 @@
       pinButton.className = 'pin-button';
       pinButton.innerHTML = '<i class="fas fa-thumbtack"></i>';
       pinButton.title = 'Pin this message';
-      
-      // Add pin functionality
       pinButton.addEventListener('click', function() {
         const isPinned = messageDiv.classList.toggle('pinned-message');
         pinButton.classList.toggle('pinned', isPinned);
@@ -1152,6 +1222,22 @@
     
     closeButton.addEventListener('click', () => {
       window.electron.close();
+    });
+    
+    // Transcript section toggle functionality
+    const toggleTranscriptButton = document.getElementById('toggle-transcript');
+    const hideTranscriptButton = document.getElementById('hide-transcript');
+    const transcriptSection = document.getElementById('transcript-section');
+    const transcriptContent = document.getElementById('transcript-content');
+    
+    toggleTranscriptButton.addEventListener('click', () => {
+      transcriptSection.classList.add('expanded');
+      toggleTranscriptButton.style.display = 'none';
+    });
+    
+    hideTranscriptButton.addEventListener('click', () => {
+      transcriptSection.classList.remove('expanded');
+      toggleTranscriptButton.style.display = 'block';
     });
     
     // Make window draggable
