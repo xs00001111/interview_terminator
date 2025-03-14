@@ -97,6 +97,23 @@
       flex: 1;
       overflow-y: auto;
       padding-right: 5px;
+      padding-left: 5px;
+    }
+    
+    .transcript-content .message {
+      margin-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 8px;
+    }
+    
+    .transcript-content .speaker-section {
+      margin-bottom: 4px;
+    }
+    
+    .transcript-content .speaker-label {
+      font-weight: bold;
+      margin-right: 6px;
+      color: rgba(255, 255, 255, 0.9);
     }
     
     .transcript-title {
@@ -782,42 +799,115 @@
       }
     });
     
+    // Track transcript messages by speaker ID
+    const transcriptMessagesBySpeaker = {};
+    let lastTranscriptId = 0;
+    
     // Add a transcript message to the transcript section
     function addTranscriptMessage(text, speakerInfo) {
-      // Create message container
-      const messageDiv = document.createElement('div');
-      messageDiv.className = 'message human-message';
+      let messageDiv;
+      let isNewMessage = false;
+      const currentScrollPos = transcriptContent.scrollTop;
+      const isAtBottom = transcriptContent.scrollHeight - transcriptContent.clientHeight <= transcriptContent.scrollTop + 5;
       
-      // Add message content based on speaker info
+      // Handle messages with speaker information
       if (speakerInfo && speakerInfo.hasSpeakerInfo) {
-        // Create structured content with speaker information
+        // Process each speaker segment
         speakerInfo.segments.forEach(segment => {
-          const speakerSection = document.createElement('div');
-          speakerSection.className = 'speaker-section';
+          const speakerId = segment.speakerId;
           
-          const speakerLabel = document.createElement('span');
-          speakerLabel.className = 'speaker-label';
-          speakerLabel.textContent = `Speaker ${segment.speakerId}:`;
-          
-          const speakerText = document.createElement('span');
-          speakerText.textContent = segment.text;
-          
-          speakerSection.appendChild(speakerLabel);
-          speakerSection.appendChild(speakerText);
-          messageDiv.appendChild(speakerSection);
+          // Check if we already have a message for this speaker
+          if (transcriptMessagesBySpeaker[speakerId]) {
+            // Update existing message
+            messageDiv = transcriptMessagesBySpeaker[speakerId];
+            const speakerSection = messageDiv.querySelector(`.speaker-section[data-speaker-id="${speakerId}"]`);
+            
+            if (speakerSection) {
+              // Update existing speaker section
+              const speakerText = speakerSection.querySelector('span:last-child');
+              speakerText.textContent = segment.text;
+            } else {
+              // Create new speaker section for this speaker
+              const newSpeakerSection = createSpeakerSection(speakerId, segment.text);
+              messageDiv.appendChild(newSpeakerSection);
+            }
+          } else {
+            // Create new message for this speaker
+            messageDiv = document.createElement('div');
+            messageDiv.className = 'message human-message';
+            messageDiv.setAttribute('data-transcript-id', lastTranscriptId++);
+            
+            const speakerSection = createSpeakerSection(speakerId, segment.text);
+            messageDiv.appendChild(speakerSection);
+            
+            // Add to transcript section
+            transcriptContent.appendChild(messageDiv);
+            
+            // Store reference to this speaker's message
+            transcriptMessagesBySpeaker[speakerId] = messageDiv;
+            isNewMessage = true;
+          }
         });
       } else {
         // Simple text without speaker information
-        const messageText = document.createElement('div');
-        messageText.textContent = text;
-        messageDiv.appendChild(messageText);
+        // Use a default speaker ID for non-speaker messages
+        const defaultSpeakerId = 'default';
+        
+        if (transcriptMessagesBySpeaker[defaultSpeakerId]) {
+          // Update existing message
+          messageDiv = transcriptMessagesBySpeaker[defaultSpeakerId];
+          const messageText = messageDiv.querySelector('div');
+          if (messageText) {
+            messageText.textContent = text;
+          } else {
+            const newMessageText = document.createElement('div');
+            newMessageText.textContent = text;
+            messageDiv.appendChild(newMessageText);
+          }
+        } else {
+          // Create new message
+          messageDiv = document.createElement('div');
+          messageDiv.className = 'message human-message';
+          messageDiv.setAttribute('data-transcript-id', lastTranscriptId++);
+          
+          const messageText = document.createElement('div');
+          messageText.textContent = text;
+          messageDiv.appendChild(messageText);
+          
+          // Add to transcript section
+          transcriptContent.appendChild(messageDiv);
+          
+          // Store reference
+          transcriptMessagesBySpeaker[defaultSpeakerId] = messageDiv;
+          isNewMessage = true;
+        }
       }
       
-      // Add to transcript section
-      transcriptContent.appendChild(messageDiv);
+      // Maintain scroll position or scroll to bottom if already at bottom
+      if (isAtBottom || isNewMessage) {
+        transcriptContent.scrollTop = transcriptContent.scrollHeight;
+      } else {
+        transcriptContent.scrollTop = currentScrollPos;
+      }
+    }
+    
+    // Helper function to create a speaker section
+    function createSpeakerSection(speakerId, text) {
+      const speakerSection = document.createElement('div');
+      speakerSection.className = 'speaker-section';
+      speakerSection.setAttribute('data-speaker-id', speakerId);
       
-      // Auto-scroll to the bottom
-      transcriptContent.scrollTop = transcriptContent.scrollHeight;
+      const speakerLabel = document.createElement('span');
+      speakerLabel.className = 'speaker-label';
+      speakerLabel.textContent = `Speaker ${speakerId}:`;
+      
+      const speakerText = document.createElement('span');
+      speakerText.textContent = text;
+      
+      speakerSection.appendChild(speakerLabel);
+      speakerSection.appendChild(speakerText);
+      
+      return speakerSection;
     }
     
     // Add a human message with speaker information
