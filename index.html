@@ -345,18 +345,34 @@
       background-color: rgba(90, 90, 90, 0.8);
     }
     
-    .pin-button {
+    .pin-button, .elaborate-button {
       position: absolute;
-      top: 5px;
-      right: 5px;
-      background: transparent;
+      top: 8px;
+      right: 40px;
+      background: none;
       border: none;
-      color: rgba(255, 255, 255, 0.5);
-      padding: 2px;
+      color: rgba(255, 255, 255, 0.6);
       cursor: pointer;
-      font-size: 12px;
-      min-width: auto;
-      transition: color 0.2s;
+      padding: 4px;
+      transition: color 0.2s ease;
+      -webkit-app-region: no-drag;
+    }
+
+    .pin-button {
+      right: 8px;
+    }
+
+    .elaborate-button {
+      right: 32px;
+    }
+
+    .elaborate-button:hover {
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .elaborate-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
     }
     
     .pin-button:hover {
@@ -945,7 +961,7 @@
         if (!currentStreamingMessage) {
           // Remove any existing non-pinned AI messages
           const aiMessages = document.querySelectorAll('.welcome-message:not(.pinned-message)');
-          if (aiMessages && aiMessages.length > 0) {
+          if (aiMessages) {
             aiMessages.forEach(msg => {
               if (msg && msg.parentNode) {
                 msg.parentNode.removeChild(msg);
@@ -1004,9 +1020,7 @@
       const nonPinnedMessages = Array.from(conversationArea.querySelectorAll('.message:not(.pinned-message):not(.welcome-message)'));
       
       // Remove non-pinned human messages only, preserve AI messages
-      if (nonPinnedMessages && nonPinnedMessages.length > 0) {
-        nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
-      }
+      nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
       
       // Create message container
       const messageDiv = document.createElement('div');
@@ -1049,9 +1063,7 @@
       
       // Remove any existing AI messages that are not pinned
       const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
-      if (aiMessages && aiMessages.length > 0) {
-        aiMessages.forEach(msg => conversationArea.removeChild(msg));
-      }
+      aiMessages.forEach(msg => conversationArea.removeChild(msg));
 
       // Remove welcome message when image is processed
       if (text.toLowerCase().includes('image processed')) {
@@ -1161,6 +1173,47 @@
       });
       
       messageDiv.appendChild(pinButton);
+
+      // Add elaborate button
+      const elaborateButton = document.createElement('button');
+      elaborateButton.className = 'elaborate-button';
+      elaborateButton.innerHTML = '<i class="fas fa-expand-alt"></i>';
+      elaborateButton.title = 'Elaborate this message';
+      elaborateButton.addEventListener('click', function() {
+        // Get the original message text first
+        const originalText = messageDiv.getAttribute('data-full-text');
+        console.log('[DEBUG] Elaborate button clicked, original text:', originalText);
+        // Disable the button and show loading state
+        elaborateButton.disabled = true;
+        elaborateButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+        
+        // Send the message to be elaborated
+        console.log('[DEBUG] Sending elaborate request to backend');
+        window.electron.elaborate(originalText);
+        
+        // Listen for the elaboration response
+        window.electron.onElaboration((data) => {
+          console.log('[DEBUG] Received elaboration response:', data);
+          // Update the message content
+          const elaboratedText = data.text;
+          messageDiv.setAttribute('data-full-text', elaboratedText);
+          
+          // Reset pagination if needed
+          const totalPages = Math.max(1, Math.ceil(elaboratedText.length / charsPerPage));
+          messageDiv.setAttribute('data-current-page', '1');
+          messageDiv.setAttribute('data-total-pages', totalPages);
+          
+          // Update the displayed content
+          updateMessageContent(messageDiv, 1);
+          
+          // Reset the button state
+          elaborateButton.disabled = false;
+          elaborateButton.innerHTML = '<i class="fas fa-expand-alt"></i>';
+        });
+      });
+      
+      messageDiv.appendChild(elaborateButton);
       
       // Add to conversation
       conversationArea.appendChild(messageDiv);
@@ -1530,12 +1583,9 @@ const conversationArea = document.querySelector('.conversation-area');
     
     // Remove screenshot notifications when receiving AI responses
     window.electron.onSuggestion((data) => {
-      const notifications = document.querySelectorAll('.screenshot-notification');
-      if (notifications && notifications.length > 0) {
-        notifications.forEach(notification => {
-          notification.remove();
-        });
-      }
+      document.querySelectorAll('.screenshot-notification').forEach(notification => {
+        notification.remove();
+      });
     });
   </script>
 </body>

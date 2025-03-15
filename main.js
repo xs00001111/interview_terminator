@@ -338,6 +338,14 @@ function createWindow() {
     return result;
   });
   
+  // Handle elaboration request
+  ipcMain.on('elaborate', (event, message) => {
+    console.log('[DEBUG] Main process received elaborate request:', message);
+    if (serverProcess) {
+      serverProcess.send({ type: 'elaborate', data: { message } });
+    }
+  });
+
   // Handle set context from file
   ipcMain.on('set-context-file', (event, filePath) => {
     console.log('Received file path in main process:', filePath);
@@ -448,6 +456,8 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('screenshot-processed', message.data);
     } else if (message.type === 'processing-screenshot' && mainWindow) {
       mainWindow.webContents.send('processing-screenshot', message.data);
+    } else if (message.type === 'elaboration' && mainWindow) {
+      mainWindow.webContents.send('elaboration', message.data);
     }
   });
   

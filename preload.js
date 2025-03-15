@@ -46,4 +46,15 @@ contextBridge.exposeInMainWorld('electron', {
     return ipcRenderer.invoke('get-window-position');
   },
   setPinStatus: (pinned) => ipcRenderer.send('set-pin-status', pinned),
+  elaborate: (message) => {
+    console.log('[DEBUG] Sending elaborate IPC message:', message);
+    ipcRenderer.send('elaborate', message);
+  },
+  onElaboration: (callback) => {
+    console.log('[DEBUG] Registering elaboration callback');
+    ipcRenderer.on('elaboration', (_, data) => {
+      console.log('[DEBUG] Received elaboration IPC message:', data);
+      callback(data);
+    });
+  },
 });

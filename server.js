@@ -180,8 +180,47 @@ process.on('message', (message) => {
     }
   } else if (message.type === 'pin-status-change') {
     handlePinStatusChange(message.data.pinned);
+  } else if (message.type === 'elaborate') {
+    if (message.data && message.data.message) {
+      elaborate(message.data.message);
+    }
   }
 });
+
+// Function to elaborate on a concise response
+async function elaborate(text) {
+  console.log('[DEBUG] Elaborate function called with text:', text);
+  try {
+    const elaborationPrompt = `Take this concise response: "${text}" and expand it into a detailed technical explanation. Provide specific examples, implementation details, or architectural considerations. Keep the response focused and professional, limited to one paragraph with maximum 5 sentences.`;
+    console.log('[DEBUG] Using AI provider:', AI_PROVIDER);
+    
+    if (AI_PROVIDER === 'gemini') {
+      console.log('[DEBUG] Calling Gemini API');
+      const result = await model.generateContent([elaborationPrompt]);
+      const elaboratedResponse = result.response.text();
+      console.log('[DEBUG] Received Gemini response');
+      process.send({ type: 'elaboration', data: { text: elaboratedResponse } });
+    } else if (AI_PROVIDER === 'openai') {
+      console.log('[DEBUG] Calling OpenAI API');
+      const result = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: elaborationPrompt }
+        ],
+        temperature: 0.3,
+      });
+      const elaboratedResponse = result.choices[0].message.content;
+      console.log('[DEBUG] Received OpenAI response');
+      process.send({ type: 'elaboration', data: { text: elaboratedResponse } });
+    }
+  } catch (error) {
+    console.error(chalk.red(`[DEBUG] Error in elaborate function: ${error.message}`));
+    console.error(chalk.red(`[DEBUG] Error stack: ${error.stack}`));
+    process.send({ type: 'error', data: { message: `Error generating elaboration: ${error.message}` } });
+  }
+}
+
 
 // Read file content if provided
 let fileContext = "";
