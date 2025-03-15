@@ -683,6 +683,7 @@
     const uploadFileButton = document.getElementById('upload-file');
     const fileInput = document.getElementById('file-input');
     const toggleContextButton = document.getElementById('toggle-context');
+    const container = document.querySelector('.container');
     
     // State variables
     let isRecording = false;
@@ -811,7 +812,7 @@
       const isAtBottom = transcriptContent.scrollHeight - transcriptContent.clientHeight <= transcriptContent.scrollTop + 5;
       
       // Handle messages with speaker information
-      if (speakerInfo && speakerInfo.hasSpeakerInfo) {
+      if (speakerInfo && speakerInfo.hasSpeakerInfo && speakerInfo.segments && Array.isArray(speakerInfo.segments)) {
         // Process each speaker segment
         speakerInfo.segments.forEach(segment => {
           const speakerId = segment.speakerId;
@@ -943,8 +944,14 @@
         // If this is the first chunk, create a new message
         if (!currentStreamingMessage) {
           // Remove any existing non-pinned AI messages
-          const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
-          aiMessages.forEach(msg => conversationArea.removeChild(msg));
+          const aiMessages = document.querySelectorAll('.welcome-message:not(.pinned-message)');
+          if (aiMessages && aiMessages.length > 0) {
+            aiMessages.forEach(msg => {
+              if (msg && msg.parentNode) {
+                msg.parentNode.removeChild(msg);
+              }
+            });
+          }
           
           // Create a new message for streaming content
           currentStreamingMessage = document.createElement('div');
@@ -962,20 +969,26 @@
           messageText.className = 'formatted-content';
           currentStreamingMessage.appendChild(messageText);
           
-          // Add to conversation
-          conversationArea.appendChild(currentStreamingMessage);
-          streamingMessageContent = '';
+          // Add to conversation if conversationArea exists
+          const conversationArea = document.querySelector('.conversation-area');
+          if (conversationArea) {
+            conversationArea.appendChild(currentStreamingMessage);
+            streamingMessageContent = '';
+          }
         }
-        
-        // Append the new chunk to the content
-        streamingMessageContent += data.text;
         
         // Update the message content with formatting
         const contentDiv = currentStreamingMessage.querySelector('.formatted-content');
-        contentDiv.innerHTML = formatStructuredContent(streamingMessageContent);
-        
-        // Scroll to the bottom
-        container.scrollTop = container.scrollHeight;
+        if (contentDiv) {
+          streamingMessageContent += data.text;
+          contentDiv.innerHTML = formatStructuredContent(streamingMessageContent);
+          
+          // Scroll to the bottom if container exists
+          const container = document.querySelector('.container');
+          if (container) {
+            container.scrollTop = container.scrollHeight;
+          }
+        }
         
         // If this is the final chunk, reset the streaming message reference
         if (data.isFinal) {
@@ -991,7 +1004,9 @@
       const nonPinnedMessages = Array.from(conversationArea.querySelectorAll('.message:not(.pinned-message):not(.welcome-message)'));
       
       // Remove non-pinned human messages only, preserve AI messages
-      nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
+      if (nonPinnedMessages && nonPinnedMessages.length > 0) {
+        nonPinnedMessages.forEach(msg => conversationArea.removeChild(msg));
+      }
       
       // Create message container
       const messageDiv = document.createElement('div');
@@ -1034,7 +1049,9 @@
       
       // Remove any existing AI messages that are not pinned
       const aiMessages = conversationArea.querySelectorAll('.welcome-message:not(.pinned-message)');
-      aiMessages.forEach(msg => conversationArea.removeChild(msg));
+      if (aiMessages && aiMessages.length > 0) {
+        aiMessages.forEach(msg => conversationArea.removeChild(msg));
+      }
 
       // Remove welcome message when image is processed
       if (text.toLowerCase().includes('image processed')) {
@@ -1513,9 +1530,12 @@ const conversationArea = document.querySelector('.conversation-area');
     
     // Remove screenshot notifications when receiving AI responses
     window.electron.onSuggestion((data) => {
-      document.querySelectorAll('.screenshot-notification').forEach(notification => {
-        notification.remove();
-      });
+      const notifications = document.querySelectorAll('.screenshot-notification');
+      if (notifications && notifications.length > 0) {
+        notifications.forEach(notification => {
+          notification.remove();
+        });
+      }
     });
   </script>
 </body>
