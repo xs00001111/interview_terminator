@@ -98,12 +98,41 @@
       overflow-y: auto;
       padding-right: 5px;
       padding-left: 5px;
+      scroll-behavior: smooth;
+      max-height: calc(100vh - 100px);
+    }
+    
+    /* Scrollbar styling for transcript content */
+    .transcript-content::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .transcript-content::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.1);
+      border-radius: 3px;
+    }
+    
+    .transcript-content::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+    }
+    
+    .transcript-content::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.5);
     }
     
     .transcript-content .message {
       margin-bottom: 8px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
       padding-bottom: 8px;
+      transition: background-color 0.3s ease, border-left 0.3s ease;
+    }
+    
+    /* Highlight style for the most recent message */
+    .transcript-content .message.recent-message {
+      background-color: rgba(60, 60, 80, 0.5);
+      border-left: 3px solid rgba(0, 120, 255, 0.8);
+      padding-left: 5px;
     }
     
     .transcript-content .speaker-section {
@@ -122,6 +151,32 @@
       text-align: center;
       padding-bottom: 5px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    .scroll-up-btn {
+      position: absolute;
+      right: 5px;
+      background-color: rgba(60, 60, 60, 0.7);
+      border: none;
+      color: white;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      -webkit-app-region: no-drag;
+      transition: background-color 0.2s ease;
+    }
+    
+    .scroll-up-btn:hover {
+      background-color: rgba(80, 80, 80, 0.9);
     }
     
     .header {
@@ -677,7 +732,10 @@
     <!-- Transcript section -->
     <div class="transcript-section" id="transcript-section">
       <button class="transcript-toggle hide-transcript" id="hide-transcript"><i class="fas fa-chevron-left"></i></button>
-      <div class="transcript-title">Transcript</div>
+      <div class="transcript-title">
+        Transcript
+        <button id="scroll-up-transcript" class="scroll-up-btn" title="Scroll to earlier messages"><i class="fas fa-chevron-up"></i></button>
+      </div>
       <div class="transcript-content" id="transcript-content">
         <!-- Transcript messages will be added here dynamically -->
       </div>
@@ -820,18 +878,32 @@
     const transcriptMessagesBySpeaker = {};
     let lastTranscriptId = 0;
     
+    // Store previous transcript text to prevent duplicates
+    const previousTranscripts = {};
+    
     // Add a transcript message to the transcript section
     function addTranscriptMessage(text, speakerInfo) {
       let messageDiv;
       let isNewMessage = false;
       const currentScrollPos = transcriptContent.scrollTop;
       const isAtBottom = transcriptContent.scrollHeight - transcriptContent.clientHeight <= transcriptContent.scrollTop + 5;
+      const isMidView = !isAtBottom && currentScrollPos > 0;
       
       // Handle messages with speaker information
       if (speakerInfo && speakerInfo.hasSpeakerInfo && speakerInfo.segments && Array.isArray(speakerInfo.segments)) {
         // Process each speaker segment
         speakerInfo.segments.forEach(segment => {
           const speakerId = segment.speakerId;
+          
+          // Initialize previous transcript for this speaker if it doesn't exist
+          if (!previousTranscripts[speakerId]) {
+            previousTranscripts[speakerId] = '';
+          }
+          
+          // Check if the new text is different from the previous one to avoid repetition
+          // Only update if the new text is different or contains new content
+          const newText = segment.text;
+          const prevText = previousTranscripts[speakerId];
           
           // Check if we already have a message for this speaker
           if (transcriptMessagesBySpeaker[speakerId]) {
@@ -840,13 +912,18 @@
             const speakerSection = messageDiv.querySelector(`.speaker-section[data-speaker-id="${speakerId}"]`);
             
             if (speakerSection) {
-              // Update existing speaker section
+              // Update existing speaker section only if text has changed
               const speakerText = speakerSection.querySelector('span:last-child');
-              speakerText.textContent = segment.text;
+              // Only update if the new text is different or contains new content
+              if (newText !== prevText) {
+                speakerText.textContent = newText;
+                previousTranscripts[speakerId] = newText;
+              }
             } else {
               // Create new speaker section for this speaker
-              const newSpeakerSection = createSpeakerSection(speakerId, segment.text);
+              const newSpeakerSection = createSpeakerSection(speakerId, newText);
               messageDiv.appendChild(newSpeakerSection);
+              previousTranscripts[speakerId] = newText;
             }
           } else {
             // Create new message for this speaker
@@ -870,16 +947,29 @@
         // Use a default speaker ID for non-speaker messages
         const defaultSpeakerId = 'default';
         
+        // Initialize previous transcript for default speaker if it doesn't exist
+        if (!previousTranscripts[defaultSpeakerId]) {
+          previousTranscripts[defaultSpeakerId] = '';
+        }
+        
+        // Check if the new text is different from the previous one to avoid repetition
+        const prevText = previousTranscripts[defaultSpeakerId];
+        
         if (transcriptMessagesBySpeaker[defaultSpeakerId]) {
           // Update existing message
           messageDiv = transcriptMessagesBySpeaker[defaultSpeakerId];
           const messageText = messageDiv.querySelector('div');
-          if (messageText) {
-            messageText.textContent = text;
-          } else {
-            const newMessageText = document.createElement('div');
-            newMessageText.textContent = text;
-            messageDiv.appendChild(newMessageText);
+          
+          // Only update if the text has changed to avoid repetition
+          if (text !== prevText) {
+            if (messageText) {
+              messageText.textContent = text;
+            } else {
+              const newMessageText = document.createElement('div');
+              newMessageText.textContent = text;
+              messageDiv.appendChild(newMessageText);
+            }
+            previousTranscripts[defaultSpeakerId] = text;
           }
         } else {
           // Create new message
@@ -894,17 +984,49 @@
           // Add to transcript section
           transcriptContent.appendChild(messageDiv);
           
-          // Store reference
+          // Store reference and update previous text
           transcriptMessagesBySpeaker[defaultSpeakerId] = messageDiv;
+          previousTranscripts[defaultSpeakerId] = text;
           isNewMessage = true;
         }
       }
       
-      // Maintain scroll position or scroll to bottom if already at bottom
+      // Enhanced scroll behavior:
+      // 1. If user is at bottom or this is a new message, scroll to bottom
+      // 2. If user has manually scrolled up (mid-view), maintain their position
+      // 3. If this is a significant update, center the latest message
+      
       if (isAtBottom || isNewMessage) {
+        // Auto-scroll to bottom for new messages or when already at bottom
         transcriptContent.scrollTop = transcriptContent.scrollHeight;
-      } else {
+      } else if (isMidView) {
+        // User has manually scrolled up, maintain their position
         transcriptContent.scrollTop = currentScrollPos;
+      } else {
+        // Center the most recent transcript
+        if (messageDiv) {
+          // Calculate position to center the message
+          const messageRect = messageDiv.getBoundingClientRect();
+          const containerRect = transcriptContent.getBoundingClientRect();
+          const centerPosition = messageDiv.offsetTop - (containerRect.height / 2) + (messageRect.height / 2);
+          
+          // Smooth scroll to center the message
+          transcriptContent.scrollTo({
+            top: centerPosition,
+            behavior: 'smooth'
+          });
+        }
+      }
+      
+      // Add a highlight effect to the most recent message
+      if (messageDiv) {
+        // Remove highlight from all messages
+        document.querySelectorAll('.transcript-content .message').forEach(msg => {
+          msg.classList.remove('recent-message');
+        });
+        
+        // Add highlight to current message
+        messageDiv.classList.add('recent-message');
       }
     }
     
@@ -1389,6 +1511,7 @@
     const hideTranscriptButton = document.getElementById('hide-transcript');
     const transcriptSection = document.getElementById('transcript-section');
     const transcriptContent = document.getElementById('transcript-content');
+    const scrollUpTranscriptButton = document.getElementById('scroll-up-transcript');
     
     toggleTranscriptButton.addEventListener('click', () => {
       transcriptSection.classList.add('expanded');
@@ -1400,41 +1523,14 @@
       toggleTranscriptButton.style.display = 'block';
     });
     
-    // Make window draggable
-    document.addEventListener('mouseenter', () => {
-      if (!isDragging) {
-        window.electron.setIgnoreMouseEvents(false);
-      }
-    });
-    
-    document.addEventListener('mouseleave', () => {
-      if (!isDragging) {
-        window.electron.setIgnoreMouseEvents(true, { forward: true });
-      }
-    });
-    
-    // Initialize the UI
-    initializeUI();
-
-    // Add keyboard navigation for scrolling
-    document.addEventListener('keydown', (e) => {
-      const container = document.querySelector('.container');
-const conversationArea = document.querySelector('.conversation-area');
-      const scrollAmount = 50; // Pixels to scroll per key press
-
-      if (e.key === 'ArrowUp') {
-        e.preventDefault(); // Prevent default scroll behavior
-        conversationArea.scrollBy({
-          top: -scrollAmount,
-          behavior: 'smooth'
-        });
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault(); // Prevent default scroll behavior
-        conversationArea.scrollBy({
-          top: scrollAmount,
-          behavior: 'smooth'
-        });
-      }
+    // Add scroll up functionality for transcript
+    scrollUpTranscriptButton.addEventListener('click', () => {
+      // Scroll up by a significant amount (about 3-4 messages)
+      const scrollAmount = 200;
+      transcriptContent.scrollBy({
+        top: -scrollAmount,
+        behavior: 'smooth'
+      });
     });
     
     // Setup resize handlers
