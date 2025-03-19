@@ -2,6 +2,22 @@ const { contextBridge, ipcRenderer, dialog } = require('electron');
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
+// Expose auth methods
+contextBridge.exposeInMainWorld('auth', {
+  completeLogin: (data) => {
+    console.log('[PRELOAD] Invoking complete-login with data:', data);
+    return ipcRenderer.invoke('complete-login', data);
+  },
+  onAuthError: (callback) => ipcRenderer.on('auth-error', (_, data) => {
+    console.log('[PRELOAD] Received auth-error event:', data);
+    callback(data);
+  }),
+  onAuthSuccess: (callback) => ipcRenderer.on('auth-success', (_, data) => {
+    console.log('[PRELOAD] Received auth-success event:', data);
+    callback(data);
+  })
+});
+
 contextBridge.exposeInMainWorld('electron', {
   // Window controls
   minimize: () => ipcRenderer.send('minimize'),

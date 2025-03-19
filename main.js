@@ -250,7 +250,7 @@ function createWindow() {
   mainWindow.loadURL('file://' + path.join(__dirname, 'index.html'));
 
   // Open DevTools in development
-   //mainWindow.webContents.openDevTools();
+   mainWindow.webContents.openDevTools();
 
   // Emitted when the window is closed
   mainWindow.on('closed', function () {
@@ -367,8 +367,43 @@ function createWindow() {
   });
 }
 
+// Import the AuthService class
+const AuthService = require('./services/auth-service');
+
+// Create an instance of the AuthService
+let authService = null;
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  // Initialize the auth service
+  authService = new AuthService();
+  
+  // Handle auth events
+  authService.on('auth-success', (session) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('auth-success', session);
+    }
+  });
+  
+  authService.on('auth-error', (message) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('auth-error', { message });
+    }
+  });
+  
+  // Register the complete-login handler
+  ipcMain.handle('complete-login', async (event, data) => {
+    console.log('[MAIN] Handling complete-login with data:', data);
+    try {
+      const { email, password } = data;
+      const success = await authService.signInWithEmailPassword(email, password);
+      return { success };
+    } catch (error) {
+      console.error('[MAIN] Error in complete-login handler:', error);
+      return { success: false, error: error.message };
+    }
+  });
+  
   createWindow();
   
   // Register keyboard shortcuts for window movement
