@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
+    "build": "electron-builder --mac",
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
     "server": "node server.js",
@@ -13,7 +14,8 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "build-and-notarize": "./scripts/build-and-notarize.sh"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +31,7 @@
     "google-gax": "^4.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openai": "^4.87.3",
+    "@supabase/supabase-js": "^2.39.8",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
@@ -38,15 +41,54 @@
     "electron-notarize": "^1.2.2"
   },
   "build": {
-    "appId": "com.yourcompany.conversationhelper",
+    "afterPack": "./electron-builder.js",
+    "appId": "com.xs.firstapp",
     "productName": "Interview-Helper",
     "afterSign": "electron-builder.js",
     "asar": true,
-    "asarUnpack": ["node_modules/**/*"],
+    "asarUnpack": [
+      "node_modules/**/*",
+      "node_modules/@google-cloud/speech/**/*",
+      "node_modules/node-record-lpcm16/**/*",
+      "node_modules/google-gax/**/*",
+      "node_modules/@google/generative-ai/**/*",
+      "node_modules/openai/**/*",
+      "node_modules/yargs/**/*",
+      "node_modules/dotenv/**/*"
+    ],
     "extraResources": [
       {
-        "from": ".env",
-        "to": ".env"
+        "from": "bin",
+        "to": "bin",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "server.js",
+        "to": ".",
+        "filter": [
+            "**/*"
+          ]
+      },
+      {
+        "from": "preload.js",
+        "to": ".",
+        "filter": [
+            "**/*"
+          ]
+      },
+      {
+        "from": "system_prompt.txt",
+        "to": ".",
+        "filter": [
+            "**/*"
+          ]
+      },
+      {
+        "from": "node_modules",
+        "to": "node_modules",
+        "filter": [
+            "**/*"
+          ]
       }
     ],
     "mac": {

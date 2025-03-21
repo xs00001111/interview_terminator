@@ -13,6 +13,9 @@ let mainWindow;
 // Track window visibility state
 let isWindowVisible = true;
 
+// Track app quitting state
+app.isQuitting = false;
+
 // Store window position and size for restoration
 let windowState = {
   position: null,
@@ -232,7 +235,9 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: app.isPackaged 
+        ? path.join(process.resourcesPath, 'preload.js') 
+        : path.join(__dirname, 'preload.js'),
       backgroundThrottling: false // Prevent throttling when in background
     }
   });
@@ -466,8 +471,35 @@ app.whenReady().then(() => {
   });
   
   // Start the server process
-  serverProcess = fork(path.join(__dirname, 'server.js'), [], {
+  const serverPath = app.isPackaged 
+  ? path.join(process.resourcesPath, 'server.js')
+  : path.join(__dirname, 'server.js');
+
+serverProcess = fork(serverPath, [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+  });
+  
+  // Add error handling for the server process
+  serverProcess.on('error', (error) => {
+    console.error('Server process error:', error);
+    if (mainWindow) {
+      mainWindow.webContents.send('error', { message: `Server process error: ${error.message}` });
+    }
+  });
+  
+  // Handle server process exit
+  serverProcess.on('exit', (code, signal) => {
+    console.log(`Server process exited with code ${code} and signal ${signal}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('error', { message: `Server process exited unexpectedly` });
+    }
+    // Restart the server process if it exits unexpectedly
+    if (code !== 0 && !app.isQuitting) {
+      console.log('Restarting server process...');
+      serverProcess = fork(serverPath, [], {
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+      });
+    }
   });
   
   // Handle messages from the server process
@@ -513,7 +545,23 @@ app.whenReady().then(() => {
 
 // Quit when all windows are closed, except on macOS
 app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    app.isQuitting = true;
+    app.quit();
+  }
+});
+
+// Handle before-quit event to clean up resources
+app.on('before-quit', () => {
+  app.isQuitting = true;
+  if (serverProcess) {
+    try {
+      serverProcess.removeAllListeners();
+      serverProcess.kill();
+    } catch (error) {
+      console.error('Error killing server process:', error);
+    }
+  }
 });
 
 // Clean up the server process when the app is quitting
@@ -566,5 +614,21 @@ function toggleWindowVisibility() {
 
 // Quit when all windows are closed, except on macOS
 app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    app.isQuitting = true;
+    app.quit();
+  }
+});
+
+// Handle before-quit event to clean up resources
+app.on('before-quit', () => {
+  app.isQuitting = true;
+  if (serverProcess) {
+    try {
+      serverProcess.removeAllListeners();
+      serverProcess.kill();
+    } catch (error) {
+      console.error('Error killing server process:', error);
+    }
+  }
 });
