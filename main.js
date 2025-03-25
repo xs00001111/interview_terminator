@@ -3,6 +3,10 @@ const path = require('path');
 const { fork } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const { createLogger } = require('./utils/logger');
+
+// Create logger for main process
+const logger = createLogger('Main');
 
 // Global reference to the server process
 let serverProcess;
@@ -70,14 +74,14 @@ async function takeScreenshot(processAfterCapture = false) {
     // Verify the file was written correctly
     const stats = fs.statSync(screenshotPath);
     if (stats.size === 0) {
-      console.error('Screenshot file was created but is empty');
+      logger.error('Screenshot file was created but is empty');
       if (mainWindow) {
         mainWindow.webContents.send('error', { message: 'Failed to save screenshot: File is empty' });
       }
       return;
     }
     
-    console.log(`Screenshot saved to: ${screenshotPath} (${stats.size} bytes)`);
+    logger.info(`Screenshot saved to: ${screenshotPath} (${stats.size} bytes)`);
     
     // Manage screenshot queue (keeping only the most recent screenshots)
     const MAX_SCREENSHOTS = 5; // Reduced from 10 to minimize disk usage and improve performance
@@ -96,9 +100,9 @@ async function takeScreenshot(processAfterCapture = false) {
       for (const fileToRemove of filesToRemove) {
         try {
           fs.unlinkSync(fileToRemove);
-          console.log(`Removed old screenshot: ${fileToRemove}`);
+          logger.debug(`Removed old screenshot: ${fileToRemove}`);
         } catch (error) {
-          console.error(`Error removing old screenshot: ${error}`);
+          logger.error(`Error removing old screenshot: ${error}`, error);
         }
       }
     }
@@ -126,7 +130,7 @@ async function takeScreenshot(processAfterCapture = false) {
     
     // If processAfterCapture is true, send the screenshot to the server for processing
     if (processAfterCapture && serverProcess) {
-      console.log('Sending screenshot to server for processing...');
+      logger.info('Sending screenshot to server for processing...');
       serverProcess.send({ type: 'process-screenshot', data: { path: screenshotPath } });
       if (mainWindow) {
         mainWindow.webContents.send('processing-screenshot', { message: 'Processing screenshot...' });
@@ -135,7 +139,7 @@ async function takeScreenshot(processAfterCapture = false) {
     
     return screenshotPath;
   } catch (err) {
-    console.error('Failed to capture screenshot:', err);
+    logger.error('Failed to capture screenshot:', err);
     if (mainWindow) {
       mainWindow.webContents.send('error', { message: `Failed to capture screenshot: ${err.message}` });
     }
@@ -166,7 +170,7 @@ async function captureScreenshotMac() {
     // Read the file and return as buffer
     return fs.readFileSync(tempPath);
   } catch (error) {
-    console.error('Error capturing screenshot on macOS:', error);
+    logger.error('Error capturing screenshot on macOS:', error);
     throw error;
   }
 }
@@ -208,7 +212,7 @@ async function captureScreenshotWindows() {
     
     return screenshot.toPNG();
   } catch (error) {
-    console.error('Error capturing screenshot on Windows:', error);
+    logger.error('Error capturing screenshot on Windows:', error);
     throw error;
   }
 }
@@ -530,12 +534,15 @@ serverProcess = fork(serverPath, [], {
   
   // Log server output
   serverProcess.stdout.on('data', (data) => {
-    console.log(`[Server]: ${data}`);
+    logger.info(`[Server]: ${data}`);
   });
   
   serverProcess.stderr.on('data', (data) => {
-    console.error(`[Server Error]: ${data}`);
+    logger.error(`[Server Error]: ${data}`);
   });
+  
+  // Log when server is ready
+  logger.info('Server process setup complete, waiting for ready signal...');
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window when the dock icon is clicked
@@ -553,25 +560,35 @@ app.on('window-all-closed', function () {
 
 // Handle before-quit event to clean up resources
 app.on('before-quit', () => {
+  logger.info('Application is about to quit');
   app.isQuitting = true;
   if (serverProcess) {
     try {
+      logger.info('Removing server process listeners and terminating process');
       serverProcess.removeAllListeners();
       serverProcess.kill();
+      logger.info('Server process terminated successfully');
     } catch (error) {
-      console.error('Error killing server process:', error);
+      logger.error('Error killing server process:', error);
     }
   }
 });
 
 // Clean up the server process when the app is quitting
 app.on('quit', () => {
+  logger.info('Application quit event triggered');
   if (serverProcess) {
-    serverProcess.kill();
+    try {
+      serverProcess.kill();
+      logger.info('Server process killed during quit');
+    } catch (error) {
+      logger.error('Error killing server process during quit:', error);
+    }
   }
   
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
+  logger.info('Global shortcuts unregistered');
 });
 
 // Enhanced function to toggle window visibility with undetectability features
