@@ -1,9 +1,8 @@
 {
-  "name": "test_google_transcribe",
+  "name": "interview_terminator",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "build": "electron-builder --mac",
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
     "server": "node server.js",
@@ -11,11 +10,9 @@
     "dev": "concurrently \"npm run server\" \"npm run electron\"",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux",
-    "clean": "rm -rf dist",
-    "build-and-notarize": "./scripts/build-and-notarize.sh"
+    "build-and-sign": "bash ./scripts/build-and-sign.sh",
+    "setup-sox": "bash ./scripts/setup_sox.sh",
+    "publish": "electron-forge publish"
   },
   "keywords": [],
   "author": "",
@@ -24,27 +21,29 @@
   "dependencies": {
     "@google-cloud/speech": "^6.7.1",
     "@google/generative-ai": "^0.24.0",
-    "@material-icons/font": "^1.0.36",
-    "chalk": "^4.1.2",
+    "@supabase/supabase-js": "^2.39.8",
     "dotenv": "^16.4.7",
+    "dotenv-expand": "^12.0.1",
+    "electron-log": "^5.3.2",
+    "electron-store": "7.0.0",
     "fs": "^0.0.1-security",
     "google-gax": "^4.4.1",
+    "highlight.js": "^11.11.1",
     "node-record-lpcm16": "^1.0.1",
     "openai": "^4.87.3",
-    "@supabase/supabase-js": "^2.39.8",
+    "update-electron-app": "^3.1.1",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@electron-forge/publisher-github": "^7.8.0",
     "concurrently": "^8.2.2",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
     "electron-notarize": "^1.2.2"
   },
   "build": {
-    "afterPack": "./electron-builder.js",
     "appId": "com.xs.firstapp",
-    "productName": "Interview-Helper",
-    "afterSign": "electron-builder.js",
+    "productName": "Interview-Terminator",
     "asar": true,
     "asarUnpack": [
       "node_modules/**/*",
@@ -56,39 +55,49 @@
       "node_modules/yargs/**/*",
       "node_modules/dotenv/**/*"
     ],
+    "icon": "icon_512x512.png",
     "extraResources": [
       {
         "from": "bin",
         "to": "bin",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "server.js",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
       },
       {
         "from": "preload.js",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
       },
       {
         "from": "system_prompt.txt",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
+      },
+      {
+        "from": ".env",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "node_modules",
         "to": "node_modules",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -97,21 +106,36 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "icon": "icon_512x512.png",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "icon_256x256.png"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
+      "icon": "icon_512x512.png",
       "category": "Utility"
     },
     "files": [
@@ -126,7 +150,9 @@
       "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
+      "!scripts/**/*",
+      "!logo.svg"
     ]
   }
 }

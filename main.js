@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { createLogger } = require('./utils/logger');
 
+
 // Create logger for main process
 const logger = createLogger('Main');
 
@@ -57,12 +58,7 @@ async function takeScreenshot(processAfterCapture = false) {
         ? await captureScreenshotMac() 
         : await captureScreenshotWindows();
     
-    // Handle pin status change
-    ipcMain.on('set-pin-status', (event, pinned) => {
-      if (serverProcess) {
-        serverProcess.send({ type: 'pin-status-change', data: { pinned } });
-      }
-    });
+    // Pin functionality removed
     
     // Generate a unique filename using timestamp
     const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
@@ -259,7 +255,7 @@ function createWindow() {
   mainWindow.loadURL('file://' + path.join(__dirname, 'index.html'));
 
   // Open DevTools in development
-   mainWindow.webContents.openDevTools();
+   // mainWindow.webContents.openDevTools();
 
   // Emitted when the window is closed
   mainWindow.on('closed', function () {
@@ -322,9 +318,38 @@ function createWindow() {
   // Handle stop recording button click
   ipcMain.on('stop-recording', () => {
     if (serverProcess) {
+      // Send stop recording message to server process
       serverProcess.send({ type: 'stop-recording' });
+      
+      // Immediately send recording status update to the renderer
+      // This ensures UI updates even if there's an issue with the server process
+      if (mainWindow) {
+        mainWindow.webContents.send('recording-status', { isRecording: false });
+      }
+      
+      // Add a timeout to check if recording was successfully stopped
+      setTimeout(() => {
+        if (serverProcess) {
+          // Send a ping to check if server is still alive
+          try {
+            serverProcess.send({ type: 'ping' });
+          } catch (error) {
+            console.error('Error pinging server process:', error);
+            // If we can't communicate with the server, it might have crashed
+            // Restart it
+            startServerProcess();
+          }
+        }
+      }, 1000);
     }
   });
+  
+  // Handle send to server
+  ipcMain.on('send-to-server', (event, message) => {
+    if (serverProcess) {
+      serverProcess.send(message);
+    }
+  });}
   
   // Handle set context from text
   ipcMain.on('set-context-text', (event, text) => {
@@ -354,6 +379,20 @@ function createWindow() {
       serverProcess.send({ type: 'elaborate', data: { message } });
     }
   });
+  
+  // Handle get-suggestion request
+  ipcMain.on('get-suggestion', (event, data) => {
+    console.log('[DEBUG] Main process received get-suggestion request:', data);
+    if (serverProcess) {
+      console.log('[DEBUG] Forwarding get-suggestion request to server process');
+      serverProcess.send({ type: 'get-suggestion', data });
+    } else {
+      console.error('[DEBUG] Cannot forward get-suggestion request: server process not available');
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: 'Server process is not available. Please restart the application.' });
+      }
+    }
+  });
 
   // Handle set context from file
   ipcMain.on('set-context-file', (event, filePath) => {
@@ -374,7 +413,7 @@ function createWindow() {
       serverProcess.send({ type: 'set-context', data: { file: filePath } });
     }
   });
-}
+
 
 // Import the AuthService class
 const AuthService = require('./services/auth-service');
@@ -383,14 +422,16 @@ const AuthService = require('./services/auth-service');
 let authService = null;
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
-  // Initialize the auth service
+app.whenReady().then(async () => {
+
+  // Now you can initialize your AuthService and it will use the environment variables
   authService = new AuthService();
   
   // Handle auth events
   authService.on('auth-success', (session) => {
     if (mainWindow) {
       mainWindow.webContents.send('auth-success', session);
+      mainWindow.webContents.send('ready', { message: 'Authentication successful' });
     }
   });
   
@@ -399,6 +440,28 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('auth-error', { message });
     }
   });
+  
+  authService.on('subscription-error', (message) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('auth-error', { message: 'You need to purchase a subscription to use this application.' });
+    }
+  });
+  
+  // Initialize auth service and check for existing session
+  logger.info('Initializing auth service and checking for existing session');
+  const hasValidSession = await authService.initialize();
+  
+  if (hasValidSession) {
+    logger.info('Valid session found, user is already authenticated');
+  } else {
+    logger.info('No valid session found, user needs to authenticate');
+    // Notify the renderer process that authentication is required
+    if (mainWindow) {
+      setTimeout(() => {
+        mainWindow.webContents.send('auth-required', { message: 'Authentication required' });
+      }, 1000); // Short delay to ensure window is ready
+    }
+  }
   
   // Register the complete-login handler
   ipcMain.handle('complete-login', async (event, data) => {
@@ -410,6 +473,19 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('[MAIN] Error in complete-login handler:', error);
       return { success: false, error: error.message };
+    }
+  });
+  
+  // Register the check-session handler
+  ipcMain.handle('check-session', async () => {
+    logger.info('[MAIN] Checking session validity');
+    try {
+      const isValid = authService.hasValidSession();
+      logger.info(`[MAIN] Session validity check: ${isValid}`);
+      return isValid;
+    } catch (error) {
+      logger.error('[MAIN] Error checking session validity:', error);
+      return false;
     }
   });
   
@@ -444,22 +520,22 @@ app.whenReady().then(() => {
     }
   });
   
-  // Register keyboard shortcut for toggling window visibility (Command+B on Mac, Control+B on Windows)
+  // Register keyboard shortcut for toggling window visibility (⌘+B on Mac, Control+B on Windows)
   globalShortcut.register('CommandOrControl+B', () => {
     toggleWindowVisibility();
   });
   
-  // Register keyboard shortcut for quitting the application (Command+Q on Mac, Control+Q on Windows)
+  // Register keyboard shortcut for quitting the application (⌘+Q on Mac, Control+Q on Windows)
   globalShortcut.register('CommandOrControl+Q', () => {
     app.quit();
   });
   
-  // Register keyboard shortcut for taking screenshots (Command+H on Mac, Control+H on Windows)
+  // Register keyboard shortcut for taking screenshots (⌘+H on Mac, Control+H on Windows)
   globalShortcut.register('CommandOrControl+H', () => {
     takeScreenshot(false);
   });
   
-  // Register keyboard shortcut for taking and processing screenshots (Command+Enter on Mac, Control+Enter on Windows)
+  // Register keyboard shortcut for taking and processing screenshots (⌘+Enter on Mac, Control+Enter on Windows)
   globalShortcut.register('CommandOrControl+Enter', () => {
     takeScreenshot(true);
   });
@@ -474,72 +550,99 @@ app.whenReady().then(() => {
     }
   });
   
+  // Function to set up all server process event handlers
+  function setupServerProcessHandlers(process) {
+    // Add error handling for the server process
+    process.on('error', (error) => {
+      logger.error('Server process error:', error);
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: `Server process error: ${error.message}` });
+      }
+    });
+    
+    // Handle server process exit
+    process.on('exit', (code, signal) => {
+      logger.error(`Server process exited with code ${code} and signal ${signal}`);
+      
+      // Only show error to user if this wasn't a normal shutdown
+      if (mainWindow && !app.isQuitting && code !== 0) {
+        mainWindow.webContents.send('error', { message: `Server process exited unexpectedly` });
+      }
+      
+      // Restart the server process if it exits unexpectedly and app is not quitting
+      if (!app.isQuitting) {
+        logger.info('Attempting to restart server process...');
+        
+        // Short delay before restarting to avoid rapid restart cycles
+        setTimeout(() => {
+          // Create a new server process with the same configuration
+          serverProcess = fork(serverPath, [], {
+            stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+          });
+          
+          // Re-attach all the event handlers
+          setupServerProcessHandlers(serverProcess);
+          
+          // Notify the renderer that we're reconnecting
+          if (mainWindow) {
+            mainWindow.webContents.send('server-reconnecting');
+          }
+        }, 1000);
+      }
+    });
+    
+    // Handle messages from the server process
+    process.on('message', (message) => {
+      if (message.type === 'transcript' && mainWindow) {
+        mainWindow.webContents.send('transcript', message.data);
+      } else if (message.type === 'suggestion' && mainWindow) {
+        mainWindow.webContents.send('suggestion', message.data);
+      } else if (message.type === 'suggestion-chunk' && mainWindow) {
+        // Handle streaming chunks from OpenAI
+        mainWindow.webContents.send('suggestion-chunk', message.data);
+      } else if (message.type === 'recording-status' && mainWindow) {
+        mainWindow.webContents.send('recording-status', message.data);
+      } else if (message.type === 'context-update' && mainWindow) {
+        mainWindow.webContents.send('context-update', message.data);
+      } else if (message.type === 'error' && mainWindow) {
+        mainWindow.webContents.send('error', message.data);
+      } else if (message.type === 'ready' && mainWindow) {
+        mainWindow.webContents.send('ready', message.data);
+      } else if (message.type === 'screenshot-processed' && mainWindow) {
+        mainWindow.webContents.send('screenshot-processed', message.data);
+      } else if (message.type === 'processing-screenshot' && mainWindow) {
+        mainWindow.webContents.send('processing-screenshot', message.data);
+      } else if (message.type === 'elaboration' && mainWindow) {
+        mainWindow.webContents.send('elaboration', message.data);
+      } else if (message.type === 'pong') {
+        logger.debug('Received pong from server process - server is alive');
+      }
+    });
+    
+    // Log server output
+    process.stdout.on('data', (data) => {
+      logger.info(`[Server]: ${data}`);
+    });
+    
+    process.stderr.on('data', (data) => {
+      logger.error(`[Server Error]: ${data}`);
+    });
+  }
+  
   // Start the server process
   const serverPath = app.isPackaged 
-  ? path.join(process.resourcesPath, 'server.js')
-  : path.join(__dirname, 'server.js');
+    ? path.join(process.resourcesPath, 'server.js')
+    : path.join(__dirname, 'server.js');
 
-serverProcess = fork(serverPath, [], {
+  logger.info(`Starting server process from: ${serverPath}`);
+  
+  // Fork the server process
+  serverProcess = fork(serverPath, [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
   });
   
-  // Add error handling for the server process
-  serverProcess.on('error', (error) => {
-    console.error('Server process error:', error);
-    if (mainWindow) {
-      mainWindow.webContents.send('error', { message: `Server process error: ${error.message}` });
-    }
-  });
-  
-  // Handle server process exit
-  serverProcess.on('exit', (code, signal) => {
-    console.log(`Server process exited with code ${code} and signal ${signal}`);
-    if (mainWindow) {
-      mainWindow.webContents.send('error', { message: `Server process exited unexpectedly` });
-    }
-    // Restart the server process if it exits unexpectedly
-    if (code !== 0 && !app.isQuitting) {
-      console.log('Restarting server process...');
-      serverProcess = fork(serverPath, [], {
-        stdio: ['pipe', 'pipe', 'pipe', 'ipc']
-      });
-    }
-  });
-  
-  // Handle messages from the server process
-  serverProcess.on('message', (message) => {
-    if (message.type === 'transcript' && mainWindow) {
-      mainWindow.webContents.send('transcript', message.data);
-    } else if (message.type === 'suggestion' && mainWindow) {
-      mainWindow.webContents.send('suggestion', message.data);
-    } else if (message.type === 'suggestion-chunk' && mainWindow) {
-      // Handle streaming chunks from OpenAI
-      mainWindow.webContents.send('suggestion-chunk', message.data);
-    } else if (message.type === 'recording-status' && mainWindow) {
-      mainWindow.webContents.send('recording-status', message.data);
-    } else if (message.type === 'context-update' && mainWindow) {
-      mainWindow.webContents.send('context-update', message.data);
-    } else if (message.type === 'error' && mainWindow) {
-      mainWindow.webContents.send('error', message.data);
-    } else if (message.type === 'ready' && mainWindow) {
-      mainWindow.webContents.send('ready', message.data);
-    } else if (message.type === 'screenshot-processed' && mainWindow) {
-      mainWindow.webContents.send('screenshot-processed', message.data);
-    } else if (message.type === 'processing-screenshot' && mainWindow) {
-      mainWindow.webContents.send('processing-screenshot', message.data);
-    } else if (message.type === 'elaboration' && mainWindow) {
-      mainWindow.webContents.send('elaboration', message.data);
-    }
-  });
-  
-  // Log server output
-  serverProcess.stdout.on('data', (data) => {
-    logger.info(`[Server]: ${data}`);
-  });
-  
-  serverProcess.stderr.on('data', (data) => {
-    logger.error(`[Server Error]: ${data}`);
-  });
+  // Set up all the event handlers
+  setupServerProcessHandlers(serverProcess);
   
   // Log when server is ready
   logger.info('Server process setup complete, waiting for ready signal...');
@@ -547,6 +650,20 @@ serverProcess = fork(serverPath, [], {
   app.on('activate', function () {
     // On macOS it's common to re-create a window when the dock icon is clicked
     if (mainWindow === null) createWindow();
+    mainWindow.on('ready-to-show', () => {
+      if (!process.env.IS_TEST) mainWindow.show();
+      
+      // Check existing session validity
+      checkExistingSession()
+        .then(isValid => {
+          mainWindow.webContents.send('session-status', isValid);
+          logger.info(`Session validity check completed: ${isValid}`);
+        })
+        .catch(error => {
+          logger.error('Session check failed:', error);
+          mainWindow.webContents.send('session-status', false);
+        });
+    });
   });
 });
 
@@ -649,3 +766,17 @@ app.on('before-quit', () => {
     }
   }
 });
+
+function checkExistingSession() {
+  const sessionStore = require('./utils/session-store');
+  return new Promise((resolve) => {
+    try {
+      // Check if there's a stored session since validateSession doesn't exist
+      const isValid = sessionStore.hasStoredSession();
+      resolve(isValid);
+    } catch (error) {
+      logger.error('Session validation error:', error);
+      resolve(false);
+    }
+  });
+}

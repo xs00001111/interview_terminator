@@ -2,19 +2,50 @@
 const encoding = 'LINEAR16';
 const sampleRateHertz = 16000;
 const languageCode = 'en-US';
-const streamingLimit = 15000; 
+const streamingLimit = 40000; 
 
-const chalk = require('chalk');
+
 const {Writable} = require('stream');
 const recorder = require('node-record-lpcm16');
 const {GoogleAuth, grpc} = require('google-gax');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { OpenAI } = require('openai');
 const fs = require('fs');
+const path = require('path');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 const events = require('events');
 const dotenv = require('dotenv');
+const dotenvExpand = require('dotenv-expand');
+
+
+
+// Ensure PATH prioritizes our bundled binaries over system binaries
+if (process.env.NODE_ENV === 'production') {
+  // In production, use the bundled binaries in the resources directory
+  const binPath = path.join(process.resourcesPath, 'bin');
+  process.env.PATH = `${binPath}:${process.env.PATH}`;
+  console.log('Production mode: Using bundled binaries from', binPath);
+} else {
+  // In development, use the local bin directory
+  const binPath = path.join(__dirname, 'bin');
+  process.env.PATH = `${binPath}:${process.env.PATH}`;
+  console.log('Development mode: Using bundled binaries from', binPath);
+}
+
+// Verify sox binary exists and is executable
+const soxBinPath = process.env.NODE_ENV === 'production'
+  ? path.join(process.resourcesPath, 'bin', 'sox')
+  : path.join(__dirname, 'bin', 'sox');
+
+try {
+  fs.accessSync(soxBinPath, fs.constants.X_OK);
+  console.log(`Sox binary found and is executable at: ${soxBinPath}`);
+} catch (err) {
+  console.error(`Sox binary not found or not executable at: ${soxBinPath}`);
+  console.error(`Error details: ${err.message}`);
+  console.error('Current PATH:', process.env.PATH);
+}
 
 // Load environment variables from .env file
 dotenv.config();
@@ -37,10 +68,24 @@ const argv = yargs(hideBin(process.argv))
   .alias('help', 'h')
   .argv;
 
+  if (process.resourcesPath) {
+    // When running in packaged app
+    const envConfig = dotenv.config({ path: path.join(process.resourcesPath, '.env') });
+    dotenvExpand.expand(envConfig);
+  } else {
+    // When running in development
+    const envConfig = dotenv.config();
+    dotenvExpand.expand(envConfig);
+  }
+
+const GOOGLE_CLOUD_SPEECH_API_KEY = process.env.GOOGLE_CLOUD_SPEECH_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const GOOGLE_GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY;
+
 function getApiKeyCredentials() {
   const sslCreds = grpc.credentials.createSsl();
   const googleAuth = new GoogleAuth();
-  const authClient = googleAuth.fromAPIKey(process.env.GOOGLE_SPEECH_API_KEY);
+  const authClient = googleAuth.fromAPIKey(GOOGLE_CLOUD_SPEECH_API_KEY);
   const credentials = grpc.credentials.combineChannelCredentials(
     sslCreds,
     grpc.credentials.createFromGoogleCredential(authClient)
@@ -56,20 +101,15 @@ const client = new speech.SpeechClient({sslCreds});
 const AI_PROVIDER = 'openai'; // Set to 'openai' or 'gemini'
 
 // Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(GOOGLE_GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", temperature: 0.3 });
 
 // Initialize OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: OPENAI_API_KEY
 });
 
 let chatHistory = [];
-let lastGeminiGenerationTime = 0;
-const GEMINI_DEBOUNCE_DELAY = 1000; // 1 second in milliseconds (reduced from 2s to improve responsiveness)
-
-// Using IPC for communication with the main process
-// Using IPC for communication with the main process
 
 // Recording state
 let isRecording = false;
@@ -90,22 +130,29 @@ function startRecording() {
       threshold: 0, // Silence threshold
       silence: 1000,
       keepSilence: true,
-      recordProgram: 'rec', // Try also "arecord" or "sox"
+      recordProgram: 'sox',
+      options: ['-d', '-b', '16', '-c', '1', '-r', '16000', '-t', 'wav', '-'],
     })
     .stream()
     .on('error', err => {
-      console.error('Audio recording error:', err);
       // Ensure we always have a valid error message to send to the frontend
       const errorMessage = err && err.message ? err.message : 'Unknown recording error';
       process.send({ type: 'error', data: { message: `Audio recording error: ${errorMessage}` } });
+      
+      // Log additional debugging information
+      console.error('Recording options:', {
+        sampleRateHertz,
+        recordProgram: 'sox',
+      options: ['-d', '-b', '16', '-c', '1', '-r', '16000', '-t', 'wav', '-'],
+        PATH: process.env.PATH
+      });
+      
       isRecording = false;
     });
   
   // Pipe the recording stream to the audio input stream transform
   recordingStream.pipe(audioInputStreamTransform);
   
-  // Minimal logging for recording start
-  console.log(chalk.cyan('\n===== RECORDING STARTED ====='));
   
   // Start the speech recognition stream
   startStream();
@@ -115,58 +162,98 @@ function startRecording() {
 function stopRecording() {
   if (!isRecording) return;
   
+  // Set recording state to false before stopping streams
+  // to prevent error handlers from firing during intentional shutdown
   isRecording = false;
   
   try {
-    // Stop the recording stream
+    // First stop the speech recognition stream to prevent further writes
+    if (recognizeStream) {
+      try {
+        recognizeStream.removeListener('data', speechCallback);
+        recognizeStream.end();
+      } catch (streamError) {
+        const errorMessage = streamError && streamError.message ? streamError.message : 'unknown error';
+        console.error(`Non-fatal recognize stream error: ${errorMessage}`);
+      }
+      recognizeStream = null;
+    }
+    
+    // Then stop the recording stream
     if (recordingStream) {
-      recordingStream.unpipe(audioInputStreamTransform);
-      recordingStream.destroy();
+      // Remove any existing error listeners before destroying the stream
+      recordingStream.removeAllListeners('error');
+      
+      // Add a one-time error handler that just logs but doesn't crash
+      recordingStream.once('error', (err) => {
+        const errorMessage = err && err.message ? err.message : 'unknown error';
+        console.error(`Non-fatal error during stream cleanup: ${errorMessage}`);
+      });
+      
+      // Safely unpipe and destroy the stream
+      try {
+        recordingStream.unpipe(audioInputStreamTransform);
+      } catch (unpipeError) {
+        const errorMessage = unpipeError && unpipeError.message ? unpipeError.message : 'unknown error';
+        console.error(`Non-fatal unpipe error: ${errorMessage}`);
+      }
+      
+      try {
+        recordingStream.destroy();
+      } catch (destroyError) {
+        const errorMessage = destroyError && destroyError.message ? destroyError.message : 'unknown error';
+        console.error(`Non-fatal destroy error: ${errorMessage}`);
+      }
+      
       recordingStream = null;
     }
     
     // Stop the speech recognition stream
     if (recognizeStream) {
-      recognizeStream.end();
-      recognizeStream.removeListener('data', speechCallback);
+      try {
+        recognizeStream.end();
+        recognizeStream.removeListener('data', speechCallback);
+      } catch (streamError) {
+        const errorMessage = streamError && streamError.message ? streamError.message : 'unknown error';
+        console.error(`Non-fatal recognize stream error: ${errorMessage}`);
+      }
       recognizeStream = null;
     }
     
-    console.log(chalk.yellow('\n===== RECORDING STOPPED ====='));
+    // Reset audio input arrays to free memory
+    audioInput = [];
+    lastAudioInput = [];
+    
+    // Notify frontend that recording has stopped successfully
+    process.send({ type: 'recording-status', data: { isRecording: false } });
+    
   } catch (error) {
-    // Handle any errors that occur during stopping
-    const errorMessage = error && error.message ? error.message : 'Unknown error stopping recording';
-    console.error(chalk.red(`Error stopping recording: ${errorMessage}`));
-    process.send({ type: 'error', data: { message: `Error stopping recording: ${errorMessage}` } });
+    // Only log the error, don't send it to the frontend when intentionally stopping
+    const errorMessage = error && error.message ? error.message : 'unknown error';
+    console.error(`Error during recording cleanup: ${errorMessage}`);
+    // Don't send error to frontend for normal stop operations
   }
 }
 
-// Variable to track if a message is currently pinned
-let isPinned = false;
-
-// Add function to handle pin status changes
-function handlePinStatusChange(pinned) {
-  isPinned = pinned;
-  console.log(chalk.cyan(`Message pin status changed: ${pinned ? 'pinned' : 'unpinned'}`));
-}
+// Pin functionality removed
 
 // Listen for messages from the main process
 process.on('message', (message) => {
   if (message.type === 'start-recording') {
     if (!isRecording) {
-      console.log(chalk.green('Starting recording...'));
+      // console.log(chalk.green('Starting recording...'));
       startRecording();
       process.send({ type: 'recording-status', data: { isRecording: true } });
     }
   } else if (message.type === 'stop-recording') {
     if (isRecording) {
-      console.log(chalk.yellow('Stopping recording...'));
+      // console.log(chalk.yellow('Stopping recording...'));
       stopRecording();
       process.send({ type: 'recording-status', data: { isRecording: false } });
     }
   } else if (message.type === 'set-context') {
     if (!isRecording && message.data) {
-      console.log(chalk.green('Setting new context...'));
+      
       if (message.data.text) {
         setTextContext(message.data.text);
       } else if (message.data.file) {
@@ -175,15 +262,22 @@ process.on('message', (message) => {
     }
   } else if (message.type === 'process-screenshot') {
     if (message.data && message.data.path) {
-      console.log(chalk.green('Processing screenshot...'));
+      // console.log(chalk.green('Processing screenshot...'));
       processScreenshot(message.data.path);
     }
-  } else if (message.type === 'pin-status-change') {
-    handlePinStatusChange(message.data.pinned);
+  // Pin functionality removed
   } else if (message.type === 'elaborate') {
     if (message.data && message.data.message) {
       elaborate(message.data.message);
     }
+  } else if (message.type === 'get-suggestion') {
+    if (message.data && message.data.text) {
+      console.log('[SERVER] Received get-suggestion request with text:', message.data.text);
+      generateAISuggestion(message.data.text);
+    }
+  } else if (message.type === 'ping') {
+    // Respond to ping messages to confirm the server is still alive
+    process.send({ type: 'pong' });
   }
 });
 
@@ -215,8 +309,6 @@ async function elaborate(text) {
       process.send({ type: 'elaboration', data: { text: elaboratedResponse } });
     }
   } catch (error) {
-    console.error(chalk.red(`[DEBUG] Error in elaborate function: ${error.message}`));
-    console.error(chalk.red(`[DEBUG] Error stack: ${error.stack}`));
     process.send({ type: 'error', data: { message: `Error generating elaboration: ${error.message}` } });
   }
 }
@@ -248,7 +340,6 @@ async function generateDocumentSummary() {
     // For text files, read as UTF-8
     if (mimeType === 'text/plain') {
       const rawFileContent = fs.readFileSync(filePath, 'utf8');
-      console.log(chalk.green(`Loaded text context file: ${filePath}`));
       
       if (AI_PROVIDER === 'gemini') {
         // Extract structured content from the document using Gemini
@@ -300,7 +391,6 @@ async function generateDocumentSummary() {
           mimeType: mimeType
         }
       };
-      console.log(chalk.green(`Loaded binary context file: ${filePath} as ${mimeType}`));
       
       if (AI_PROVIDER === 'gemini') {
         // Extract structured content from the document using Gemini
@@ -318,9 +408,7 @@ async function generateDocumentSummary() {
         documentSummary = result.response.text();
       } else if (AI_PROVIDER === 'openai') {
         // For OpenAI, we can't directly process binary files, so we'll need to extract text first
-        // This is a simplified approach - in a real app, you might want to use a document processing service
-        console.log(chalk.yellow('Binary file processing with OpenAI is limited. Using basic text extraction.'));
-        
+
         // For simplicity, we'll just use a placeholder message
         extractedContent = 'Binary document content (OpenAI cannot directly process binary files)';
         documentSummary = 'Binary document (OpenAI cannot directly process binary files)';
@@ -334,7 +422,6 @@ async function generateDocumentSummary() {
     await initializeChat();
     
   } catch (error) {
-    console.error(chalk.red(`Error processing file: ${error.message}`));
     process.exit(1);
   }
 }
@@ -350,9 +437,9 @@ async function initializeChat() {
         role: "system",
         parts: [{ 
           text: systemPrompt + (fileContext ? "\nUse the provided resume or personal introduction document to craft responses that match the user's background, experiences, and qualifications. When answering questions, reference specific details from their resume/introduction when appropriate." : "\nUse the previous conversation responses to maintain a consistent personality and background knowledge throughout the conversation.")
-        }]
-      }
-    };
+      }]
+    }
+  };
 
     // If we have a binary file content, add it to the history instead of system instruction
     if (fileContentPart) {
@@ -400,7 +487,22 @@ async function initializeChat() {
 // Initialize chat with default configuration
 // Will be properly initialized when context is loaded or by initializeChat()
 // Read system prompt from file
-const systemPrompt = fs.readFileSync('system_prompt.txt', 'utf8');
+
+// Determine if we're running in a packaged app
+let systemPrompt;
+try {
+  // In development mode, read from the local file
+  systemPrompt = fs.readFileSync('system_prompt.txt', 'utf8');
+} catch (error) {
+  // In production/packaged mode, read from the resources directory
+  if (process.resourcesPath) {
+    const resourcePath = path.join(process.resourcesPath, 'system_prompt.txt');
+    systemPrompt = fs.readFileSync(resourcePath, 'utf8');
+  } else {
+    console.error('Failed to load system prompt:', error);
+    systemPrompt = ''; // Fallback to empty prompt
+  }
+}
 
 // Initialize chat based on selected AI provider
 let chat;
@@ -445,6 +547,8 @@ let finalRequestEndTime = 0;
 let newStream = true;
 let bridgingOffset = 0;
 let lastTranscriptWasFinal = false;
+// Initialize global variable to track the last speaker role
+global.lastSpeakerRole = 'INTERVIEWER'; // Default first speaker is INTERVIEWER
 
 function startStream() {
   // Clear current audioInput
@@ -504,133 +608,115 @@ const speechCallback = stream => {
         wordsBySpeaker[speakerTag].push(word.word);
       });
       
-      // Create speaker information object
+      // Create speaker information object with role detection
+      const speakers = Object.keys(wordsBySpeaker).map(tag => ({
+        speakerTag: parseInt(tag),
+        text: wordsBySpeaker[tag].join(' ')
+      }));
+      
+      // Detect roles based on speaker tags
+      // Assuming first speaker (usually lower tag) is INTERVIEWER, second is INTERVIEWEE
+      // This follows the system prompt rule: "If speaker roles are unclear, assume alternating turns (first speaker is INTERVIEWER)"
+      const speakerRoles = {};
+      if (speakers.length >= 2) {
+        // Sort speakers by tag
+        const sortedSpeakers = [...speakers].sort((a, b) => a.speakerTag - b.speakerTag);
+        // Assign roles - first speaker is INTERVIEWER, second is INTERVIEWEE
+        speakerRoles[sortedSpeakers[0].speakerTag] = 'INTERVIEWER';
+        speakerRoles[sortedSpeakers[1].speakerTag] = 'INTERVIEWEE';
+      } else if (speakers.length === 1) {
+        // If only one speaker, use turn-taking heuristic
+        // If last transcript was final, alternate the role
+        if (lastTranscriptWasFinal) {
+          // If previous speaker was INTERVIEWER, this one is INTERVIEWEE and vice versa
+          const previousRole = global.lastSpeakerRole || 'INTERVIEWEE';
+          speakerRoles[speakers[0].speakerTag] = previousRole === 'INTERVIEWER' ? 'INTERVIEWEE' : 'INTERVIEWER';
+          global.lastSpeakerRole = speakerRoles[speakers[0].speakerTag];
+        } else {
+          // If we're continuing the same utterance, use the same role as before
+          speakerRoles[speakers[0].speakerTag] = global.lastSpeakerRole || 'INTERVIEWER';
+        }
+      }
+      
+      // Add role information to speaker info
       speakerInfo = {
         hasSpeakerInfo: true,
-        speakers: Object.keys(wordsBySpeaker).map(tag => ({
-          speakerTag: parseInt(tag),
-          text: wordsBySpeaker[tag].join(' ')
+        speakers: speakers.map(speaker => ({
+          ...speaker,
+          role: speakerRoles[speaker.speakerTag] || 'UNKNOWN'
         }))
       };
     }
   }
 
   if (stream.results[0].isFinal) {
-    process.stdout.write(chalk.green(`${stdoutText}\n`));
+    // process.stdout.write(chalk.green(`${stdoutText}\n`));
     
-    // Send finalized transcript to Gemini
+    // Get the finalized transcript
     const userMessage = stream.results[0].alternatives[0].transcript;
+    
+    // Format speaker information with segments for the frontend
+    let formattedSpeakerInfo = {
+      hasSpeakerInfo: speakerInfo.hasSpeakerInfo,
+      segments: []
+    };
+    
+    // Add segments with speaker roles
+    if (speakerInfo.hasSpeakerInfo && speakerInfo.speakers) {
+      formattedSpeakerInfo.segments = speakerInfo.speakers.map(speaker => ({
+        speakerId: speaker.speakerTag,
+        text: speaker.text,
+        role: speaker.role || 'UNKNOWN'
+      }));
+    }
     
     // Send transcript to the Electron frontend via IPC without logging
     process.send({ 
       type: 'transcript', 
       data: { 
         text: userMessage,
-        speakerInfo: speakerInfo
+        speakerInfo: formattedSpeakerInfo
       } 
     });
 
-    // Check if enough time has passed since the last generation
-    const currentTime = Date.now();
+    // No longer automatically generating AI suggestions here
+    // Suggestions will only be generated when explicitly requested via the 'get-suggestion' IPC call
     
-    // Check if message is pinned - don't generate new suggestions if pinned
-    if (isPinned) {
-      console.log(chalk.yellow('Skipping AI suggestion generation - message is pinned'));
-    }
-    // If not pinned and enough time has passed, generate new suggestion
-    else if (currentTime - lastGeminiGenerationTime >= GEMINI_DEBOUNCE_DELAY) {
-      lastGeminiGenerationTime = currentTime;
-      
-      if (AI_PROVIDER === 'gemini') {
-        // Use Gemini for response generation
-        chat.sendMessageStream(userMessage, {
-          timeout: 30000 // Add timeout to prevent hanging requests
-        })
-        .then(async (result) => {
-          let fullResponse = '';
-          for await (const chunk of result.stream) {
-            fullResponse += chunk.text();
-            // Remove console logging to improve performance
-          }
-          
-          // Send AI suggestion to the Electron frontend via IPC without logging
-          process.send({ type: 'suggestion', data: { text: fullResponse } });
-          
-          // Update chat history
-          chat = model.startChat({
-            history: [
-              ...chatHistory
-            ]
-          });
-          chatHistory.push(
-            { role: 'user', parts: [{ text: userMessage }] },
-            { role: 'model', parts: [{ text: fullResponse }] }
-          );
-        });
-      } else if (AI_PROVIDER === 'openai') {
-        // Use OpenAI for response generation
-        (async () => {
-          try {
-            // Prepare messages for OpenAI
-            const messages = [
-              { role: 'system', content: systemPrompt },
-              ...chatHistory,
-              { role: 'user', content: userMessage }
-            ];
-            
-            // Create a streaming completion
-            const stream = await openai.chat.completions.create({
-              model: 'gpt-4o',
-              messages: messages,
-              stream: true,
-              temperature: 0.3,
-            });
-            
-            let fullResponse = '';
-            
-            // Process the stream
-            for await (const chunk of stream) {
-              const content = chunk.choices[0]?.delta?.content || '';
-              fullResponse += content;
-            }
-            
-            // Send AI suggestion to the Electron frontend
-            process.send({ type: 'suggestion', data: { text: fullResponse } });
-            
-            // Update chat history
-            chatHistory.push(
-              { role: 'user', content: userMessage },
-              { role: 'assistant', content: fullResponse }
-            );
-          } catch (error) {
-            console.error(chalk.red(`OpenAI API error: ${error.message}`));
-            process.send({ type: 'error', data: { message: `OpenAI API error: ${error.message}` } });
-          }
-        })();
-      }
-      
-      isFinalEndTime = resultEndTime;
-      lastTranscriptWasFinal = true;
-    }
+    isFinalEndTime = resultEndTime;
+    lastTranscriptWasFinal = true;
   } else {
     // Make sure transcript does not exceed console character length
     if (stdoutText.length > process.stdout.columns) {
       stdoutText =
         stdoutText.substring(0, process.stdout.columns - 4) + '...';
     }
-    process.stdout.write(chalk.red(`${stdoutText}`));
     
     // This section has been moved and updated with speaker info
 
     lastTranscriptWasFinal = false;
     
-    // Send interim transcript to the Electron frontend via IPC with speaker info
+    // Send interim transcript to the Electron frontend via IPC with speaker info and roles
     if (stdoutText) {
+      // Format speaker information with segments for the frontend
+      let formattedSpeakerInfo = {
+        hasSpeakerInfo: speakerInfo.hasSpeakerInfo,
+        segments: []
+      };
+      
+      // Add segments with speaker roles
+      if (speakerInfo.hasSpeakerInfo && speakerInfo.speakers) {
+        formattedSpeakerInfo.segments = speakerInfo.speakers.map(speaker => ({
+          speakerId: speaker.speakerTag,
+          text: speaker.text,
+          role: speaker.role || 'UNKNOWN'
+        }));
+      }
+      
       process.send({ 
         type: 'transcript', 
         data: { 
           text: stream.results[0].alternatives[0].transcript,
-          speakerInfo: speakerInfo,
+          speakerInfo: formattedSpeakerInfo,
           isFinal: false
         } 
       });
@@ -656,9 +742,17 @@ const audioInputStreamTransform = new Writable({
         bridgingOffset = Math.floor(
           (lastAudioInput.length - chunksFromMS) * chunkTime
         );
-
-        for (let i = chunksFromMS; i < lastAudioInput.length; i++) {
-          recognizeStream.write(lastAudioInput[i]);
+0
+        // Check if recognizeStream is valid before writing to it
+        if (recognizeStream && !recognizeStream.destroyed) {
+          for (let i = chunksFromMS; i < lastAudioInput.length; i++) {
+            try {
+              recognizeStream.write(lastAudioInput[i]);
+            } catch (err) {
+              console.error('Error writing to recognizeStream:', err.message);
+              break;
+            }
+          }
         }
       }
       newStream = false;
@@ -666,25 +760,44 @@ const audioInputStreamTransform = new Writable({
 
     audioInput.push(chunk);
 
-    if (recognizeStream) {
-      recognizeStream.write(chunk);
+    // Check if recognizeStream is valid before writing to it
+    if (recognizeStream && !recognizeStream.destroyed) {
+      try {
+        recognizeStream.write(chunk);
+      } catch (err) {
+        console.error('Error writing to recognizeStream:', err.message);
+      }
     }
 
     next();
   },
 
   final() {
-    if (recognizeStream) {
-      recognizeStream.end();
+    // Check if recognizeStream is valid before ending it
+    if (recognizeStream && !recognizeStream.destroyed) {
+      try {
+        recognizeStream.end();
+      } catch (err) {
+        console.error('Error ending recognizeStream:', err.message);
+      }
     }
   },
 });
 
 function restartStream() {
   if (recognizeStream) {
-    recognizeStream.end();
-    recognizeStream.removeListener('data', speechCallback);
-    recognizeStream = null;
+    try {
+      // First remove the listener to prevent callbacks during cleanup
+      recognizeStream.removeListener('data', speechCallback);
+      // Then safely end the stream if it's not already destroyed
+      if (!recognizeStream.destroyed) {
+        recognizeStream.end();
+      }
+    } catch (err) {
+      console.error('Error during stream restart:', err.message);
+    } finally {
+      recognizeStream = null;
+    }
   }
   if (resultEndTime > 0) {
     finalRequestEndTime = isFinalEndTime;
@@ -699,9 +812,6 @@ function restartStream() {
   if (!lastTranscriptWasFinal) {
     process.stdout.write('\n');
   }
-  process.stdout.write(
-    chalk.yellow(`${streamingLimit * restartCounter}: RESTARTING REQUEST\n`)
-  );
 
   newStream = true;
 
@@ -741,7 +851,7 @@ async function setTextContext(text) {
     });
     
   } catch (error) {
-    console.error(chalk.red(`Error processing text: ${error.message}`));
+    // console.error(chalk.red(`Error processing text: ${error.message}`));
     process.send({ type: 'error', data: { message: `Error processing text: ${error.message}` } });
   }
 }
@@ -764,7 +874,7 @@ async function processContextFile(filePath) {
     // For text files, read as UTF-8
     if (mimeType === 'text/plain') {
       const rawFileContent = fs.readFileSync(filePath, 'utf8');
-      console.log(chalk.green(`Loaded text context file: ${filePath}`));
+      // console.log(chalk.green(`Loaded text context file: ${filePath}`));
       
       // Extract structured content from the document
       const extractResult = await model.generateContent([
@@ -792,7 +902,7 @@ async function processContextFile(filePath) {
           mimeType: mimeType
         }
       };
-      console.log(chalk.green(`Loaded binary context file: ${filePath} as ${mimeType}`));
+      // console.log(chalk.green(`Loaded binary context file: ${filePath} as ${mimeType}`));
       
       // Extract structured content from the document
       const extractResult = await model.generateContent([
@@ -825,7 +935,7 @@ async function processContextFile(filePath) {
     });
     
   } catch (error) {
-    console.error(chalk.red(`Error processing file: ${error.message}`));
+    // console.error(chalk.red(`Error processing file: ${error.message}`));
     process.send({ type: 'error', data: { message: `Error processing file: ${error.message}` } });
   }
 }
@@ -839,7 +949,6 @@ async function main() {
   await initializeChat();
   
   // Don't automatically start recording
-  console.log(chalk.cyan('\n===== READY ====='));
   console.log('Click Start to begin recording.');
   
   // Notify the frontend that we're ready
@@ -848,7 +957,7 @@ async function main() {
 
 // Run the main function
 main().catch(error => {
-  console.error(chalk.red(`Error: ${error.message}`));
+  // console.error(chalk.red(`Error: ${error.message}`));
   process.exit(1);
 });
 
@@ -865,7 +974,7 @@ process.on('SIGINT', () => {
 // Process a screenshot to extract text using Gemini
 async function processScreenshot(screenshotPath) {
   try {
-    console.log(chalk.cyan('\n===== PROCESSING SCREENSHOT ====='));
+    // console.log(chalk.cyan('\n===== PROCESSING SCREENSHOT ====='));
     console.log(`Screenshot path: ${screenshotPath}`);
     
     // Read the screenshot file as base64
@@ -949,7 +1058,6 @@ Format your response in markdown for better readability.`;
     
     return extractedText;
   } catch (error) {
-    console.error(chalk.red(`Error processing screenshot: ${error.message}`));
     
     // Combine error messages to reduce number of IPC calls
     process.send({
@@ -973,105 +1081,120 @@ Format your response in markdown for better readability.`;
   }
 }
 
-// Modify the generateGeminiResponse function to respect pin status
-async function generateGeminiResponse(transcript) {
-  if (isPinned) {
-    console.log(chalk.yellow('Skipping AI suggestion - message is pinned'));
-    return;
-  }
-
-  const now = Date.now();
-  if (now - lastGeminiGenerationTime < GEMINI_DEBOUNCE_DELAY) {
-    return;
-  }
-  lastGeminiGenerationTime = now;
+// Function to generate AI suggestions when explicitly requested
+async function generateAISuggestion(transcript) {
+  console.log('[SERVER] generateAISuggestion called');
   
-  if (AI_PROVIDER === 'gemini') {
-    chat.sendMessageStream(transcript)
-    .then(async (result) => {
-      let fullResponse = '';
-      for await (const chunk of result.stream) {
-        fullResponse += chunk.text();
-        process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
-      }
-      
-      // Send AI suggestion to the Electron frontend via IPC
-      console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
-      process.send({ type: 'suggestion', data: { text: fullResponse } });
-      
-      // Update chat history
-      chat = model.startChat({
-        history: [
-          ...chatHistory
-        ]
-      });
-      chatHistory.push(
-        { role: 'user', parts: [{ text: transcript }] },
-        { role: 'model', parts: [{ text: fullResponse }] }
-      );
-    });
-  } else if (AI_PROVIDER === 'openai') {
-    (async () => {
-      try {
-        // Prepare messages for OpenAI
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          ...chatHistory,
-          { role: 'user', content: transcript }
-        ];
-        
-        // Create a streaming completion
-        const stream = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: messages,
-          stream: true,
-          temperature: 0.3,
-        });
-        
+  // Pin functionality removed
+  
+  // Check if the transcript is too short to generate a meaningful response
+  if (transcript.trim().length < 20) {
+    console.log('[SERVER] Skipping AI suggestion - transcript too short');
+    process.send({ type: 'error', data: { message: 'Question is too short to generate a meaningful response.' } });
+    return;
+  }
+  
+  console.log('[SERVER] Generating AI suggestion for:', transcript);
+  // No need to track lastGeminiGenerationTime since we're using manual control
+  
+  try {
+    if (AI_PROVIDER === 'gemini') {
+      console.log('[SERVER] Using Gemini for suggestion');
+      chat.sendMessageStream(transcript)
+      .then(async (result) => {
         let fullResponse = '';
-        
-        // Process the stream and send each chunk to the frontend
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          if (content) {
-            fullResponse += content;
-            process.stdout.write(chalk.blue(`\n[AI Suggestion] ${content}`));
-            
-            // Send each chunk to the frontend as it arrives
-            process.send({ 
-              type: 'suggestion-chunk', 
-              data: { 
-                text: content,
-                fullText: fullResponse,
-                isFinal: false
-              } 
-            });
-          }
+        for await (const chunk of result.stream) {
+          fullResponse += chunk.text();
+          // process.stdout.write(chalk.blue(`\n[AI Suggestion] ${chunk.text()}`));
         }
         
-        // Send the final complete response
-        console.log('[SERVER] Sending final suggestion via IPC:', fullResponse);
-        process.send({ 
-          type: 'suggestion', 
-          data: { 
-            text: fullResponse,
-            isFinal: true 
-          } 
-        });
+        // Send AI suggestion to the Electron frontend via IPC
+        console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
+        process.send({ type: 'suggestion', data: { text: fullResponse } });
         
         // Update chat history
+        chat = model.startChat({
+          history: [
+            ...chatHistory
+          ]
+        });
         chatHistory.push(
-          { role: 'user', content: transcript },
-          { role: 'assistant', content: fullResponse }
+          { role: 'user', parts: [{ text: transcript }] },
+          { role: 'model', parts: [{ text: fullResponse }] }
         );
-      } catch (error) {
-        console.error(chalk.red(`OpenAI API error: ${error.message}`));
-        process.send({ type: 'error', data: { message: `OpenAI API error: ${error.message}` } });
-      }
-    })();}
-    isFinalEndTime = resultEndTime;
-    lastTranscriptWasFinal = true;
+      })
+      .catch(error => {
+        console.error('[SERVER] Error generating Gemini suggestion:', error.message);
+        process.send({ type: 'error', data: { message: `Error generating AI suggestion: ${error.message}` } });
+      });
+    } else if (AI_PROVIDER === 'openai') {
+      console.log('[SERVER] Using OpenAI for suggestion');
+      (async () => {
+        try {
+          // Prepare messages for OpenAI
+          const messages = [
+            { role: 'system', content: systemPrompt },
+            ...chatHistory,
+            { role: 'user', content: transcript }
+          ];
+          
+          console.log('[SERVER] Sending request to OpenAI API');
+          // Create a streaming completion
+          const stream = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            messages: messages,
+            stream: true,
+            temperature: 0.3,
+          });
+          
+          let fullResponse = '';
+          
+          // Process the stream and send each chunk to the frontend
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            if (content) {
+              fullResponse += content;
+              // process.stdout.write(chalk.blue(`\n[AI Suggestion] ${content}`));
+              
+              // Send each chunk to the frontend as it arrives
+              process.send({ 
+                type: 'suggestion-chunk', 
+                data: { 
+                  text: content,
+                  fullText: fullResponse,
+                  isFinal: false
+                } 
+              });
+            }
+          }
+          
+          // Send the final complete response
+          console.log('[SERVER] Sending final suggestion via IPC:', fullResponse);
+          process.send({ 
+            type: 'suggestion', 
+            data: { 
+              text: fullResponse,
+              isFinal: true 
+            } 
+          });
+          
+          // Update chat history
+          chatHistory.push(
+            { role: 'user', content: transcript },
+            { role: 'assistant', content: fullResponse }
+          );
+        } catch (error) {
+          console.error('[SERVER] Error generating OpenAI suggestion:', error.message);
+          process.send({ type: 'error', data: { message: `Error generating AI suggestion: ${error.message}` } });
+        }
+      })();
+    }
+  } catch (error) {
+    console.error('[SERVER] Unexpected error in generateAISuggestion:', error.message);
+    process.send({ type: 'error', data: { message: `Unexpected error generating AI suggestion: ${error.message}` } });
   }
+}
+
 
   
 
