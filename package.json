@@ -1,9 +1,8 @@
 {
-  "name": "test_google_transcribe",
+  "name": "interview_terminator",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "build": "electron-builder --mac",
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
     "server": "node server.js",
@@ -11,11 +10,14 @@
     "dev": "concurrently \"npm run server\" \"npm run electron\"",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win",
     "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux",
-    "clean": "rm -rf dist",
-    "build-and-notarize": "./scripts/build-and-notarize.sh"
+    "dist:arm64": "bash ./scripts/build-arm64.sh",
+    "build-and-sign": "bash ./scripts/build-and-sign.sh",
+    "build-and-sign:arm64": "bash ./scripts/build-sign-arm64.sh",
+    "setup-sox": "bash ./scripts/setup_sox.sh"
   },
   "keywords": [],
   "author": "",
@@ -24,30 +26,27 @@
   "dependencies": {
     "@google-cloud/speech": "^6.7.1",
     "@google/generative-ai": "^0.24.0",
-    "@material-icons/font": "^1.0.36",
-    "chalk": "^4.1.2",
+    "@supabase/supabase-js": "^2.39.8",
     "dotenv": "^16.4.7",
-    "fs": "^0.0.1-security",
+    "dotenv-expand": "^12.0.1",
+    "electron-log": "^5.3.2",
+    "electron-store": "7.0.0",
     "google-gax": "^4.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openai": "^4.87.3",
-    "@supabase/supabase-js": "^2.39.8",
+    "update-electron-app": "^3.1.1",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
     "electron": "^35.0.0",
-    "electron-builder": "^25.1.8",
-    "electron-notarize": "^1.2.2"
+    "electron-builder": "^25.1.8"
   },
   "build": {
-    "afterPack": "./electron-builder.js",
     "appId": "com.xs.firstapp",
-    "productName": "Interview-Helper",
-    "afterSign": "electron-builder.js",
+    "productName": "Interview-Terminator",
     "asar": true,
     "asarUnpack": [
-      "node_modules/**/*",
       "node_modules/@google-cloud/speech/**/*",
       "node_modules/node-record-lpcm16/**/*",
       "node_modules/google-gax/**/*",
@@ -56,62 +55,110 @@
       "node_modules/yargs/**/*",
       "node_modules/dotenv/**/*"
     ],
+    "artifactName": "${productName}-${arch}.${ext}",
+    "icon": "icon_512x512.png",
     "extraResources": [
       {
-        "from": "bin",
-        "to": "bin",
-        "filter": ["**/*"]
+        "from": "bin/${arch}/sox",
+        "to": "bin/sox"
+      },
+      {
+        "from": "bin/AudioCapture",
+        "to": "bin/AudioCapture"
       },
       {
         "from": "server.js",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
+      },
+      {
+        "from": "sox-audio-capture.js",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "preload.js",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
       },
       {
         "from": "system_prompt.txt",
         "to": ".",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
+      },
+      {
+        "from": ".env",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "node_modules",
         "to": "node_modules",
         "filter": [
-            "**/*"
-          ]
+          "**/*"
+        ]
       }
     ],
     "mac": {
+      "notarize": false,
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "icon": "icon_512x512.png",
+      "signIgnore": [
+        "node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/*/locale.pak"
+      ],
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
       "target": [
-        "nsis"
-      ]
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Interview Terminator",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
+      "icon": "icon_512x512.png",
       "category": "Utility"
     },
     "files": [
@@ -126,7 +173,18 @@
       "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
+      "!scripts/**/*",
+      "!logo.svg",
+      "!swift-audio-capture/**/*",
+      "!examples/**/*",
+      "!*.txt",
+      "!test-*.js",
+      "!**/TROUBLESHOOTING.md",
+      "!**/INTEGRATION.md",
+      "!ICON_README.md",
+      "!fix_permissions.sh",
+      "!swift-audio-performance-report.json"
     ]
   }
 }
