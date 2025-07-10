@@ -1,251 +1,227 @@
 const { createSupabaseClient } = require('./supabase');
 
 /**
- * User plan types and their interfaces
- */
-
-/**
  * @typedef {Object} UserPlan
- * @property {'free' | 'pay_as_you_go' | 'guaranteed_job'} plan_type - Type of plan
- * @property {number} interviews_remaining - Number of interviews remaining (-1 for unlimited)
- * @property {number} minutes_per_interview - Maximum minutes per interview
- * @property {string|null} expires_at - Expiration date (ISO string) or null if no expiration
- */
-
-/**
- * @typedef {Object} PlanLimits
- * @property {number} maxInterviews - Maximum number of interviews allowed
- * @property {number} maxMinutesPerInterview - Maximum minutes per interview
- * @property {boolean} isUnlimited - Whether the plan has unlimited interviews
+ * @property {'free' | 'pay_as_you_go' | 'guaranteed_job' | 'monthly_subscription'} plan_type
+ * @property {number} interviews_remaining
+ * @property {number} minutes_per_interview
+ * @property {string|null} expires_at
+ * @property {string|null} subscription_status - e.g., 'active', 'canceled', 'past_due'
+ * @property {string|null} stripe_subscription_id - Stripe subscription ID
  */
 
 /**
  * @typedef {Object} PlanStatus
- * @property {boolean} canStart - Whether user can start a new interview
- * @property {string} [reason] - Reason why user cannot start (if applicable)
- * @property {Object} plan - Plan details
- * @property {string} plan.type - Plan type
- * @property {number} plan.interviewsRemaining - Number of interviews remaining
- * @property {number} plan.minutesPerInterview - Minutes per interview
- * @property {boolean} plan.isExpired - Whether plan is expired
- * @property {string|null} plan.expiresAt - Expiration date or null
+ * @property {boolean} canStart
+ * @property {string} [reason]
+ * @property {Object} plan
+ * @property {string} plan.planType
+ * @property {number} plan.interviewsRemaining
+ * @property {number} plan.minutesPerInterview
+ * @property {boolean} plan.isExpired
+ * @property {string|null} plan.expiresAt
+ * @property {boolean} plan.hasUnlimitedAccess
+ * @property {boolean} plan.isRefunded
  */
 
+const planCache = new Map();
+const CACHE_DURATION = 30000; // 30 seconds
+
 /**
- * Get the user's current plan from Supabase
- * @param {string} userId - The user ID
- * @returns {Promise<UserPlan|null>} The user plan or null if not found
+ * Checks if a user has unlimited access by calling a database RPC function.
+ * @param {string} userId The user ID.
+ * @returns {Promise<boolean>} True if the user has unlimited access.
  */
-async function getUserPlan(userId) {
-  console.log(`[Plan] Attempting to get plan for user ID: ${userId}`); // Log User ID
+async function checkUnlimitedAccess(userId) {
   try {
     const supabase = createSupabaseClient();
-    console.log(`[Plan] Supabase client created: ${!!supabase}`); // Log client creation status
-    
-    // Use maybeSingle() instead of single() to avoid errors when no rows are found
+    const { data, error } = await supabase.rpc('has_unlimited_access', { p_user_id: userId });
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error(`[Plan] Error checking unlimited access for user ${userId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Gets the detailed subscription status for a user.
+ * @param {string} userId The user ID.
+ * @returns {Promise<UserPlan|null>} The user's plan with subscription details.
+ */
+async function getSubscriptionStatus(userId) {
+  const cached = planCache.get(userId);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached.plan;
+  }
+
+  try {
+    const supabase = createSupabaseClient();
     const { data: plan, error } = await supabase
       .from('user_plans')
-      .select('*')
+      .select('*, plan_type::text')
       .eq('user_id', userId)
       .maybeSingle();
 
-    console.log(`[Plan] Supabase query result - Data:`, plan); // Log data
-    console.log(`[Plan] Supabase query result - Error:`, error); // Log error
+    if (error && error.code !== 'PGRST116') throw error;
 
-    if (error && error.code !== 'PGRST116') {
-      console.error(`[Plan] Supabase query error (excluding PGRST116):`, error); // Log specific error
-      // Only throw for errors other than 'no rows returned'
-      throw error;
-    }
+    const resultPlan = plan || {
+      user_id: userId,
+      plan_type: 'free',
+      interviews_remaining: 10,
+      minutes_per_interview: 5,
+      expires_at: null,
+      subscription_status: null,
+      stripe_subscription_id: null,
+    };
 
-    // If no plan is found, return a default free plan
-    if (!plan) {
-      console.log(`[Plan] No plan found for user ${userId} in DB, using default free plan`); // Adjusted log message
-      return {
-        user_id: userId,
-        plan_type: 'free',
-        interviews_remaining: 10,
-        minutes_per_interview: 5,
-        expires_at: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-    }
-
-    console.log(`[Plan] Plan found for user ${userId}:`, plan); // Log found plan
-    return plan;
+    planCache.set(userId, { plan: resultPlan, timestamp: Date.now() });
+    return resultPlan;
   } catch (error) {
-    console.error(`[Plan] Error caught in getUserPlan for user ${userId}:`, error); // Log caught error
-    // Return a default free plan in case of error
+    console.error(`[Plan] Error in getSubscriptionStatus for user ${userId}:`, error);
     return {
       user_id: userId,
       plan_type: 'free',
       interviews_remaining: 10,
       minutes_per_interview: 5,
       expires_at: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      subscription_status: null,
+      stripe_subscription_id: null,
     };
   }
 }
 
 /**
- * Check the user's plan limits
- * @param {string} userId - The user ID
- * @returns {Promise<PlanLimits>} The plan limits
+ * Syncs subscription status with Stripe (placeholder for backend call).
  */
-async function checkUserPlan(userId) {
-  try {
-    // getUserPlan now always returns a plan (either from DB or default)
-    const plan = await getUserPlan(userId);
-    
-    // Check if guaranteed job plan is expired
-    if (plan.plan_type === 'guaranteed_job' && plan.expires_at && new Date(plan.expires_at) < new Date()) {
-      return {
-        maxInterviews: 10,
-        maxMinutesPerInterview: 5,
-        isUnlimited: false
-      };
-    }
-
-    // Unlimited plan
-    if (plan.plan_type === 'guaranteed_job' || plan.interviews_remaining === -1) {
-      return {
-        maxInterviews: Infinity,
-        maxMinutesPerInterview: Infinity,
-        isUnlimited: true
-      };
-    }
-
-    return {
-      maxInterviews: plan.interviews_remaining,
-      maxMinutesPerInterview: plan.minutes_per_interview,
-      isUnlimited: false
-    };
-  } catch (error) {
-    console.error('Error checking plan:', error);
-    // Default to free tier limits
-    return {
-      maxInterviews: 10,
-      maxMinutesPerInterview: 5,
-      isUnlimited: false
-    };
-  }
+async function syncSubscriptionStatus(userId) {
+  // In a real app, this would trigger a backend function (e.g., Supabase Edge Function)
+  // that securely communicates with Stripe to update the subscription status.
+  console.log(`[Plan] Triggering subscription sync for user ${userId}`);
+  planCache.delete(userId); // Invalidate cache to force a refresh
 }
 
 /**
- * Get the user's plan status
- * @param {string} userId - The user ID
- * @returns {Promise<PlanStatus>} The plan status
+ * Gets the comprehensive plan status for a user, including subscription details.
+ * @param {string} userId The user ID.
+ * @returns {Promise<PlanStatus>} The detailed plan status.
  */
 async function getPlanStatus(userId) {
   try {
-    // getUserPlan now always returns a plan (either from DB or default)
-    const plan = await getUserPlan(userId);
-    
+    const plan = await getSubscriptionStatus(userId);
+    const hasUnlimitedAccess = await checkUnlimitedAccess(userId);
+    const isRefunded = plan.subscription_status === 'refunded';
 
-    const isExpired = plan.expires_at ? new Date(plan.expires_at) < new Date() : false;
-    const isUnlimited = plan.plan_type === 'guaranteed_job' || plan.interviews_remaining === -1;
-
-    // Check if plan is expired (only applies to guaranteed job plan)
-    if (plan.plan_type === 'guaranteed_job' && isExpired) {
+    if (isRefunded) {
       return {
         canStart: false,
-        reason: 'Your guaranteed job plan has expired',
-        plan: {
-          type: plan.plan_type,
-          interviewsRemaining: 0,
-          minutesPerInterview: 0,
-          isExpired: true,
-          expiresAt: plan.expires_at
-        }
+        reason: 'Your subscription has been refunded, and access has been revoked.',
+        plan: { ...plan, hasUnlimitedAccess: false, isRefunded: true },
       };
     }
 
-    // Check remaining interviews for non-unlimited plans
-    if (!isUnlimited && plan.interviews_remaining <= 0) {
+    if (hasUnlimitedAccess) {
+      return {
+        canStart: true,
+        plan: { ...plan, interviewsRemaining: -1, hasUnlimitedAccess: true, isRefunded: false },
+      };
+    }
+
+    const isExpired = plan.expires_at ? new Date(plan.expires_at) < new Date() : false;
+    if (plan.plan_type === 'guaranteed_job' && isExpired) {
       return {
         canStart: false,
-        reason: `You've used all your interviews for this plan`,
-        plan: {
-          type: plan.plan_type,
-          interviewsRemaining: 0,
-          minutesPerInterview: plan.minutes_per_interview,
-          isExpired: false,
-          expiresAt: plan.expires_at
-        }
+        reason: 'Your guaranteed job plan has expired.',
+        plan: { ...plan, hasUnlimitedAccess: false, isRefunded: false, isExpired: true },
+      };
+    }
+
+    if (plan.interviews_remaining <= 0) {
+      return {
+        canStart: false,
+        reason: "You've used all your interviews for this plan.",
+        plan: { ...plan, hasUnlimitedAccess: false, isRefunded: false },
       };
     }
 
     return {
       canStart: true,
-      plan: {
-        type: plan.plan_type,
-        interviewsRemaining: isUnlimited ? -1 : plan.interviews_remaining,
-        minutesPerInterview: plan.minutes_per_interview,
-        isExpired: false,
-        expiresAt: plan.expires_at
-      }
+      plan: { ...plan, hasUnlimitedAccess: false, isRefunded: false },
     };
   } catch (error) {
-    console.error('Error checking plan status:', error);
+    console.error(`[Plan] Error checking plan status for user ${userId}:`, error);
     return {
       canStart: false,
-      reason: 'Unable to verify plan status',
+      reason: 'Unable to verify plan status. Please try again.',
       plan: {
         type: 'unknown',
         interviewsRemaining: 0,
         minutesPerInterview: 0,
         isExpired: false,
-        expiresAt: null
-      }
+        expiresAt: null,
+        hasUnlimitedAccess: false,
+        isRefunded: false,
+      },
     };
   }
 }
 
 /**
- * Decrement the interview count for a user
- * @param {string} userId - The user ID
+ * Decrements the interview count for a user if they do not have unlimited access.
+ * @param {string} userId The user ID.
  * @returns {Promise<void>}
  */
 async function decrementInterviewCount(userId) {
   try {
+    const hasUnlimited = await checkUnlimitedAccess(userId);
+    if (hasUnlimited) {
+      console.log(`[Plan] Not decrementing interviews for user ${userId}: has unlimited access.`);
+      return;
+    }
+
     const supabase = createSupabaseClient();
-    
-    // First, get the current plan to check the interviews_remaining count
     const { data: plan, error: fetchError } = await supabase
       .from('user_plans')
       .select('interviews_remaining')
       .eq('user_id', userId)
       .maybeSingle();
-    
+
     if (fetchError) throw fetchError;
-    
-    // Don't decrement if plan doesn't exist or has unlimited interviews (-1)
+
     if (!plan || plan.interviews_remaining === -1) {
-      console.log(`[Plan] Not decrementing interviews for user ${userId}: ${!plan ? 'no plan found' : 'unlimited plan'}`);
+      console.log(`[Plan] Not decrementing interviews for user ${userId}: no plan or legacy unlimited.`);
       return;
     }
-    
-    // Update with the decremented value
+
     const { error: updateError } = await supabase
       .from('user_plans')
-      .update({
-        interviews_remaining: plan.interviews_remaining - 1,
-        updated_at: new Date().toISOString()
-      })
+      .update({ interviews_remaining: plan.interviews_remaining - 1 })
       .eq('user_id', userId);
-    
+
     if (updateError) throw updateError;
+
+    planCache.delete(userId); // Invalidate cache after decrementing
+    console.log(`[Plan] Decremented interview count for user ${userId}.`);
   } catch (error) {
-    console.error('Error decrementing interview count:', error);
+    console.error(`[Plan] Error decrementing interview count for user ${userId}:`, error);
     throw error;
   }
 }
 
 module.exports = {
-  getUserPlan,
-  checkUserPlan,
+  checkUnlimitedAccess,
+  getSubscriptionStatus,
+  syncSubscriptionStatus,
   getPlanStatus,
-  decrementInterviewCount
+  decrementInterviewCount,
+  // Deprecated, but kept for backward compatibility if needed.
+  getUserPlan: getSubscriptionStatus, 
+  checkUserPlan: async (userId) => {
+    const status = await getPlanStatus(userId);
+    return {
+        maxInterviews: status.plan.hasUnlimitedAccess ? Infinity : status.plan.interviewsRemaining,
+        maxMinutesPerInterview: status.plan.minutesPerInterview || 5,
+        isUnlimited: status.plan.hasUnlimitedAccess
+    };
+  }
 };

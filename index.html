@@ -1,150 +1,3330 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Realtime Conversation Helper</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="styles-plan-modal.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compact UI Demo - Interview Terminator</title>
+    <link rel="stylesheet" href="styles-plan-modal.css">
+    
+    <!-- Prism.js for syntax highlighting -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    
+    <!-- MathJax for LaTeX rendering -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            },
+            options: {
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+            }
+        };
+    </script>
+    <style>
+        :root {
+            /* Apple Dark Mode Inspired Palette */
+            --system-background-dark: #3A3A3C; /* Changed to lighter grey for better visibility */
+            --secondary-system-background-dark: #2C2C2E;
+            --tertiary-system-background-dark: #3A3A3C;
+            
+            --text-primary-dark: rgba(255, 255, 255, 0.92);
+            --text-secondary-dark: rgba(255, 255, 255, 0.9);
+            --text-tertiary-dark: rgba(235, 235, 245, 0.35);
+            
+            --accent-apple-blue: #1E40AF; /* Tailwind blue-800 - darker, less saturated */
+            --accent-apple-blue-hover: #3B82F6; /* Tailwind blue-500 - lighter on hover */
+            --accent-apple-green: #30D158;
+            --accent-apple-green-hover: #28B34B;
+            --accent-apple-red: #B91C1C; /* Tailwind red-700 - darker, less saturated */
+            --accent-apple-red-hover: #EF4444; /* Tailwind red-500 - lighter on hover */
+            --error-red: #FF3B30; /* A more saturated red for errors */
+            --accent-foreground-dark: #FFFFFF;
+
+            --separator-dark: rgba(84, 84, 88, 0.65);
+            --fill-primary-dark: rgba(120, 120, 128, 0.36); /* For subtle button backgrounds, etc. */
+            --fill-secondary-dark: rgba(120, 120, 128, 0.24);
+            --fill-tertiary-dark: rgba(120, 120, 128, 0.18);
+
+            /* UI Element Specific */
+            --control-background-dark: rgba(120, 120, 128, 0.12); /* For general controls */
+            --control-background-hover-dark: rgba(120, 120, 128, 0.20);
+            --control-border-dark: rgba(120, 120, 128, 0.25);
+
+            /* Legacy variables (map or remove later if not needed) */
+            --primary: var(--accent-apple-blue);
+            --primary-hover: var(--accent-apple-blue-hover);
+            --primary-foreground: var(--accent-foreground-dark);
+            --destructive: var(--accent-apple-red);
+            --destructive-hover: var(--accent-apple-red-hover);
+            --destructive-foreground: var(--accent-foreground-dark);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body { 
+            height: 100%; 
+            margin: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+            position: relative;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            pointer-events: none; /* Allow clicks to pass through transparent areas */
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.05) 0%, transparent 50%),
+                        radial-gradient(circle at 70% 80%, rgba(255, 255, 255, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        /* ❂ Main container that holds pop-ups */
+        #root {
+            position: relative;
+            height: 100%;                       /* grows automatically */
+            overflow: visible;
+        }
+
+        /* ❃ Pop-ups are absolutely positioned below the bar */
+        .auth-container.show,
+        .popup.visible {
+            position: absolute;
+            top: 60px;                          /* just under the bar */
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        /* ❶ The BAR – sits at the top, full width */
+        .compact-bar {
+            -webkit-app-region: drag; /* Make the entire bar draggable */
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            height: 48px;                       /* same as BAR_HEIGHT */
+            width: max-content;
+            max-width: 100%;      
+            display: flex;
+            align-items: center;
+            background: rgba(20, 20, 20, 0.6);
+            border-radius: 12px; /* Slightly more rounded */
+            padding: 4px 4px; /* Adjusted padding */
+            gap: 6px;
+            /*   Adjusted gap */
+            box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1), /* Glass border */
+                        /* 0px 8px 32px rgba(0, 0, 0, 0.4), */ /* Removed black shadow */
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1); /* Inner highlight */
+            border: 0.5px solid rgba(255, 255, 255, 0.15); /* Glass border */
+            cursor: move;
+            user-select: none;
+            z-index: 1000;
+            /* transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.2s ease-out; */
+            min-width: auto; /* Allow width to be more flexible initially */
+            pointer-events: auto; /* Keep compact bar interactive */
+        }
+
+        .compact-bar:hover {
+            background: rgba(30, 30, 30, 0.7); /* Slightly more opaque on hover */
+            box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.15), 
+                        /* 0px 12px 40px rgba(0, 0, 0, 0.5), */ /* Removed black shadow */
+                        inset 0 1px 0 rgba(255, 255, 255, 0.15);
+           
+        }
+
+        /* Logo/Brand */
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 4px; /* Increased gap */
+            /* font-weight and font-size removed, will be handled by icon or specific text elements */
+            color: var(--text-primary-dark);
+        }
+
+        .app-logo-svg {
+            width: 24px;
+            height: 24px;
+            margin-left: 6px; 
+            margin-right: 4px; /* Space between logo and other elements */
+            /* fill and stroke are now controlled by specific shape classes */
+        }
+
+        /* Logo styles are now inline in the SVG */
+
+
+        /* Action buttons container */
+        .action-buttons {
+            display: flex;
+            align-items: center;
+            gap: 4px;  
+            /* flex-grow: 1; */
+            justify-content: center;
+        }
+
+        /* General Action buttons (for icon-only buttons like expand) */
+        .action-btn {
+            background: transparent; /* Fully transparent by default */
+            border: none;
+            padding: 6px; /* Slightly reduced padding */
+            border-radius: 5px; /* More rectangular */
+            cursor: pointer;
+            transition: background-color 0.2s ease-out, transform 0.15s ease-out;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px; /* Adjusted size */
+            height: 30px;
+            position: relative;
+            color: var(--text-secondary-dark); /* Default icon color */
+           -webkit-app-region: no-drag;
+        }
+
+        /* Window Controls */
+        .window-controls {
+            pointer-events: auto; /* Ensure controls are interactive */
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-right: 6px;
+        }
+
+
+        .window-control-btn
+         {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            -webkit-app-region: no-drag;
+        }
+
+        .window-control-btn svg
+         {
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .window-controls:hover .window-control-btn svg,
+        .window-controls:hover  {
+            opacity: 1;
+        }
+
+        .minimize-btn {
+            background-color: #ffbd2e;
+        }
+
+        .minimize-btn:hover {
+            background-color: #ffaa00;
+        }
+
+        .minimize-btn svg {
+            color: #995700;
+        }
+
+        .maximize-btn {
+            background-color: #28ca42;
+        }
+
+        .maximize-btn:hover {
+            background-color: #1aad34;
+        }
+
+        .maximize-btn svg {
+            color: #0d5016;
+        }
+
+        .close-popup-btn {
+            pointer-events: auto; /* Ensure close button is interactive */
+            color: #ff5757;
+            -webkit-app-region: no-drag;
+        }
+
+        .menu-control-btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            transition: all 0.2s ease; 
+            background: #ff5f57;
+            color: transparent;
+            -webkit-app-region: no-drag;
+        }
+
+        .menu-control-btn:hover {
+            background: #ff3b30;
+        }
+
+        .menu-control-btn:hover svg {
+            color: #000;
+        }
+
+        /* Header Controls Layout */
+        .transcript-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .action-btn:hover {
+            background-color: var(--control-background-hover-dark);
+            /* transform: scale(1.05); /* Subtle scale on hover */
+        }
+
+        .action-btn.active {
+            background-color: var(--fill-secondary-dark); /* More prominent active state */
+            color: var(--text-primary-dark);
+        }
+
+        .action-btn svg {
+            width: 17px; /* Standardized icon size */
+            height: 17px;
+            fill: currentColor;
+        }
+
+        .ai-btn {
+            background-color: var(--accent-apple-blue);
+            color: var(--accent-foreground-dark);
+            min-width: 150px; /* Increased width for AI Answer button */
+            padding: 6px 12px !important; /* Adjusted padding */
+            height: 30px !important; /* Fixed height for consistency */
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px; /* Apple standard UI font size */
+            font-weight: 500;
+            border-radius: 5px; /* More rectangular */
+            gap: 5px; /* Adjusted gap */
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            transition: background-color 0.2s ease-out, transform 0.15s ease-out;
+            -webkit-app-region: no-drag;
+        }
+
+        .ai-btn:hover {
+            background-color: var(--accent-apple-blue-hover) !important;
+            /* transform: scale(1.03) !important; /* Subtle hover effect */
+        }
+
+        .ai-btn.active {
+            background-color: var(--accent-apple-blue-hover); /* Can be same as hover or slightly different */
+            color: var(--accent-foreground-dark);
+            /* transform: none; */ 
+        }
+
+        .listen-now-btn {
+            background-color: rgba(120, 120, 128, 0.5); /* Lighter, more opaque background */
+            color: var(--text-primary-dark);
+            padding: 6px 12px !important; /* Keep vertical padding, min-width will handle width */
+            min-width: 220px; /* Significantly wider */
+            height: 30px !important;
+            border-radius: 5px; /* More rectangular */
+            border: 1px solid rgba(255, 255, 255, 0.2); /* Add subtle border for button definition */
+            font-weight: 500;
+            font-size: 13px;
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            /* margin-right: 6px; /* Adjusted margin */
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            transition: background-color 0.2s ease-out, color 0.2s ease-out, transform 0.15s ease-out, border-color 0.2s ease-out;
+            -webkit-app-region: no-drag;
+        }
+
+        .listen-now-btn:hover {
+            background-color: rgba(120, 120, 128, 0.65) !important; /* Even lighter on hover */
+            border-color: rgba(255, 255, 255, 0.3) !important; /* Brighter border on hover */
+            /* transform: scale(1.03) !important; */
+        }
+
+        .listen-now-btn.active {
+            background-color: var(--accent-apple-red) !important;
+            color: var(--accent-foreground-dark) !important;
+            box-shadow: none; /* Removed inset shadow for flatter Apple style */
+        }
+
+        .listen-now-btn.active:hover {
+            background-color: var(--accent-apple-red-hover) !important;
+        }
+
+        .listen-now-btn svg {
+            width: 17px; /* Standardized icon size */
+            height: 17px;
+            fill: currentColor;
+        }
+
+        @keyframes soundwave {
+            0%, 100% { transform: scaleY(0.5); }
+            50% { transform: scaleY(1); }
+        }
+
+        .listen-now-btn.active .soundwave-bars .bar {
+            animation: soundwave 1.2s infinite ease-in-out;
+            transform-origin: center;
+        }
+
+        .listen-now-btn.active .soundwave-bars .bar:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .listen-now-btn.active .soundwave-bars .bar:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        .listen-now-btn:not(.active) .soundwave-bars rect {
+            animation: none;
+        }
+
+        /* Loading spinner styles */
+        .loading-spinner {
+            display: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .listen-now-btn.loading .loading-spinner {
+            display: block;
+        }
+
+        .listen-now-btn.loading .soundwave-bars {
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Removed status indicator - redundant with button states */
+
+
+
+        /* Popup stack looks subdued while the menu has focus */
+        #popupStack.blurred {
+            pointer-events: none;      /* makes sure random clicks don’t hit it */
+        }
+
+
+
+
+
+        .elaboration-card {
+            margin-top: 5px;
+        }
+
+        .answer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .answer-header .loading-spinner {
+            display: inline-block;
+            margin-right: 8px;
+            color: var(--text-secondary-dark);
+        }
+
+        .answer-header .loading-spinner circle {
+            stroke: currentColor;
+        }
+
+        .source-label {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .voice-label {
+            background: rgba(76, 175, 80, 0.2);
+            color: #4CAF50;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+
+        .screenshot-label {
+            background: rgba(33, 150, 243, 0.2);
+            color: #2196F3;
+            border: 1px solid rgba(33, 150, 243, 0.3);
+        }
+
+        /* Code block styling for better integration with dark theme */
+        pre[class*="language-"] {
+            background: rgba(40, 44, 52, 0.9) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            margin: 12px 0;
+            padding: 16px;
+            overflow-x: auto;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* ---------- NON-code <pre> blocks (keep current wrapping) ---------- */
+        pre:not([class*="language-"]) {
+          white-space: pre-wrap;   /* keep \n, allow wrapping */
+          word-break: break-word;   /* Allow breaking long words */
+          overflow-wrap: break-word;
+          max-width: 100%;
+        }
+
+        /* ---------- Prism code blocks (preserve exact layout but constrain width) -------------- */
+        pre[class*="language-"],
+        code[class*="language-"] {
+          white-space: pre;        /* 1-for-1 spaces + tabs  */
+          word-break: normal;      /* never split identifiers */
+          overflow-wrap: normal;   /* no forced breaks        */
+          tab-size: 4;             /* optional – visual tabs  */
+          color: #abb2bf !important;
+          font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+
+        /* Inline code styling */
+        :not(pre) > code {
+            background: rgba(120, 120, 128, 0.2) !important;
+            color: #e06c75 !important;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        /* Math equation styling */
+        .MathJax {
+            color: var(--text-primary-dark) !important;
+        }
+
+        /* Ensure code blocks in answer cards are properly styled */
+        .answer-text pre[class*="language-"] {
+            margin: 8px 0;
+            max-width: 100%;
+        }
+
+        .answer-text code {
+            word-break: break-word;
+        }
+
+        .answer-title {
+            color: var(--text-primary-dark);
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+
+
+        .answer-text {
+            color: var(--text-secondary-dark);
+            line-height: 1.55;
+            font-size: 14px;
+            margin-bottom: 10px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+            /* font-style: italic; /* Removed italic for cleaner look */
+        }
+
+        /* Ensure URLs and long text break properly */
+        .ai-card .card-content a,
+        .ai-card .card-content p,
+        .ai-card .card-content div,
+        .ai-card .card-content span {
+            word-break: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+        }
+
+        /* Handle very long words or URLs */
+        .ai-card .card-content {
+            word-break: break-word;
+        }
+
+        .answer-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Buttons within answer cards */
+        .speak-btn, .elaborate-btn, .copy-btn {
+            border: 1px solid var(--control-border-dark);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 7px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease-out;
+            background-color: var(--fill-quaternary-dark); /* Default for action buttons in card */
+            color: var(--text-primary-dark);
+            border: 1px solid var(--control-border-dark);
+        }
+        .speak-btn:hover, .elaborate-btn:hover, .copy-btn:hover {
+            background-color: var(--fill-tertiary-dark);
+        }
+        .speak-btn:active, .elaborate-btn:active, .copy-btn:active {
+            background-color: var(--fill-secondary-dark);
+            transform: scale(0.98);
+        }
+        .speak-btn:hover, .elaborate-btn:hover, .copy-btn:hover {
+            background-color: var(--fill-tertiary-dark);
+        }
+        .speak-btn.primary {
+            background-color: var(--accent-apple-blue); /* Primary action in card */
+            color: var(--accent-foreground-dark);
+        }
+        .speak-btn.primary:hover {
+            background-color: var(--accent-apple-blue-hover);
+        }
+        .elaborate-btn, .copy-btn {
+            background-color: var(--fill-tertiary-dark);
+        }
+        .elaborate-btn:hover, .copy-btn:hover {
+            background-color: var(--fill-secondary-dark);
+        }
+        .elaborate-btn:active, .copy-btn:active {
+            background-color: var(--fill-primary-dark);
+            transform: scale(0.98);
+        }
+        .speak-btn svg, .elaborate-btn svg, .copy-btn svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .hotkey-hint {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--primary-foreground);
+            opacity: 0.7;
+            margin-left: 4px;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            bottom: -35px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        .action-btn:hover .tooltip {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Expand button styling */
+        .expand-btn {
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .expand-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .expand-btn.active {
+            background: rgba(255, 255, 255, 0.2);
+            color: var(--primary-foreground);
+        }
+
+        /* Expanded menu panel */
+        .expanded-menu {
+            position: fixed;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20, 20, 20, 0.6);
+            border-radius: 10px;
+            padding: 20px;
+            min-width: 300px;
+            box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1), /* Glass border */
+                        /* 0 20px 80px rgba(0, 0, 0, 0.4), */ /* Removed black shadow */
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1); /* Inner highlight */
+            border: 0.5px solid rgba(255, 255, 255, 0.15); /* Glass border */
+            z-index: 1100;   /* ⇧ higher than #popupStack’s 999 */
+            opacity: 0;
+            visibility: hidden;
+            transform: translateX(-50%) translateY(-10px);
+            transition: all 0.3s ease;
+            pointer-events: auto; /* Keep menu panel interactive */
+        }
+
+        .expanded-menu.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .menu-header {
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .menu-control-btn {
+            background-color: #ff5f57;
+            border: 1px solid #e0443e;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            cursor: pointer;
+            padding: 0;
+            margin-right: 8px;
+            flex-shrink: 0; /* Prevent shrinking */
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .menu-control-btn svg {
+            display: none; /* Hide the default icon */
+            width: 8px;
+            height: 8px;
+            stroke: #5a0000;
+            stroke-width: 2.5;
+        }
+
+        .menu-control-btn:hover svg {
+            display: block;
+        }
+
+        .menu-title {
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 16px;
+        }
+
+        .menu-section {
+            margin-bottom: 20px;
+        }
+
+        .menu-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .menu-section-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.6);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            margin-bottom: 4px;
+        }
+
+        .menu-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .menu-item-content {
+            display: flex;
+            gap: 10px;
+        }
+
+        .menu-item-icon {
+            width: 16px;
+            height: 16px;
+            color: var(--primary-foreground);
+        }
+
+        .menu-item-text {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+        }
+
+        .menu-item-action {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 12px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: left;
+            gap: 10px;
+            padding: 12px;
+            /* background: rgba(255, 255, 255, 0.05); */
+            border-radius: 8px;
+            margin-bottom: 8px;      /* keep the header card exactly as it is */
+        }
+
+        /* make the new row look like a normal line, not a clickable button */
+        .interviews-left-row {
+            display: block;
+            background: transparent;
+            padding: 0 12px 4px;     /* same left gutter as other text */
+            cursor: default;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 14px;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: white;
+            color: var(--secondary-foreground);
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .user-details {
+            flex: 1;
+        }
+
+        .user-name {
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .user-status {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+        }
+
+        .login-prompt {
+            text-align: center;
+            padding: 20px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .login-btn {
+            background: var(--accent-apple-blue);
+            color: var(--accent-foreground-dark);
+            border: 1px solid var(--accent-apple-blue);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+            margin-top: 12px;
+            box-shadow: 0 2px 8px rgba(10, 132, 255, 0.2);
+        }
+
+        .login-btn:hover {
+            background: var(--accent-apple-blue-hover);
+            border-color: var(--accent-apple-blue-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
+        }
+
+        .login-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(10, 132, 255, 0.2);
+        }
+
+
+
+
+
+        .file-input-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .file-input-button:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .file-name-display {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-grow: 1;
+            padding: 8px 0;
+        }
+
+        .clear-file-btn {
+            background: none;
+            border: none;
+            color: var(--destructive); /* Assuming --destructive is for this kind of red */
+            cursor: pointer;
+            font-size: 12px;
+            padding: 4px;
+            margin-left: 5px;
+            visibility: hidden; /* Hidden by default */
+        }
+        .clear-file-btn:hover {
+            color: var(--destructive-hover); /* Assuming --destructive-hover for hover state */
+        }
+
+        .context-section-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.85);
+            margin-top: 20px; /* Add some space above the title */
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Authentication Container Styling */
+        .auth-container {
+            -webkit-app-region: no-drag;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(20, 20, 20, 0.6);
+            border-radius: 14px;
+            padding: 0;
+            width: 400px;
+            max-width: calc(100vw - 40px);
+            border: 0.5px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            z-index: 1001;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease-out, transform 0.2s ease-out, visibility 0.2s ease-out;
+            pointer-events: auto;
+        }
+
+        .auth-container input,
+        .auth-container label {
+            -webkit-app-region: no-drag;
+            cursor: text;
+            pointer-events: auto;
+        }
+
+        .auth-container button {
+            -webkit-app-region: no-drag;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        .auth-container.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .auth-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .auth-header h3 {
+            margin: 0;
+            color: var(--text-primary-dark);
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-auth {
+            background: none;
+            border: none;
+            color: var(--text-secondary-dark);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+
+        .close-auth:hover {
+            background-color: var(--fill-secondary-dark);
+            color: var(--text-primary-dark);
+        }
+
+        .auth-form {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .auth-status {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+        }
+
+        .auth-status.auth-error {
+            background-color: rgba(255, 69, 58, 0.1);
+            color: var(--accent-apple-red);
+            border: 1px solid rgba(255, 69, 58, 0.2);
+            display: block;
+        }
+
+        .auth-status.auth-success {
+            background-color: rgba(48, 209, 88, 0.1);
+            color: var(--accent-apple-green);
+            border: 1px solid rgba(48, 209, 88, 0.2);
+            display: block;
+        }
+
+        .auth-form input {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: var(--text-primary-dark);
+            font-size: 14px;
+            transition: border-color 0.2s ease, background-color 0.2s ease;
+        }
+
+        .auth-form input:focus {
+            outline: none;
+            border-color: var(--accent-apple-blue);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .auth-form input::placeholder {
+            color: var(--text-secondary-dark);
+        }
+
+        .login-button {
+            background: var(--accent-apple-blue);
+            color: var(--accent-foreground-dark);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .login-button:hover {
+            background: var(--accent-apple-blue-hover);
+        }
+
+        .login-button:disabled {
+            background: var(--fill-secondary-dark);
+            color: var(--text-secondary-dark);
+            cursor: not-allowed;
+        }
+
+
+
+        .transcript-message {
+            padding: 10px 14px; /* Message padding */
+            border-radius: 18px; /* More rounded bubbles */
+            transition: background-color 0.2s ease;
+            max-width: 80%; 
+            word-wrap: break-word;
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 5px; /* Gap between transcript messages */
+        }
+
+        .transcript-message.interviewer {
+            background-color: #245abe; /* Dark Blue */
+            color: white;
+            align-self: flex-start;
+            margin-right: auto;
+            border-bottom-left-radius: 6px; /* Tail effect */
+        }
+
+        .transcript-message.you {
+            background-color: #36454F; /* Dark Grey */
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+            border-bottom-right-radius: 6px; /* Tail effect */
+        }
+
+        /* .transcript-message:hover removed for cleaner look, can be added back if desired */
+
+        .message-header { /* This seems to be a sub-header within a message, might need to re-evaluate structure or remove if not used */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px; /* Reduced margin */
+        }
+
+        .speaker-label { /* This is for the label above the bubble, not inside .message-header */
+            font-weight: 500;
+            font-size: 12px;
+            color: var(--text-secondary-dark);
+            margin-bottom: 3px; /* Space between label and bubble */
+            padding: 0 2px;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .message-text {
+            color: rgba(255, 255, 255, 0.85);
+            line-height: 1.5;
+            font-size: 14px;
+        }
+
+        .status-bar {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 10px;
+            font-size: 12px;
+            z-index: 1001;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            pointer-events: none;
+        }
+
+        .status-bar.show {
+            opacity: 1;
+        }
+
+        /* Panel container #popupStack - Unified single box */
+        #popupStack {
+            position: fixed;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: row;
+            gap: 0;
+            width: calc(100% - 40px);
+            max-width: 800px;
+            min-width: 600px;
+            min-height: 280px;
+            max-height: calc(100vh - 120px);
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease-out, visibility 0.2s ease-out;
+            z-index: 999;
+            background: rgba(20, 20, 20, 0.8);
+            border-radius: 14px;
+            border: 0.5px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+            padding: 5px;
+        }
+
+        #popupStack.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* AI Suggestion card - Left side of unified box */
+        .ai-card {
+            flex: 0 0 60%;
+            background: transparent;
+            border-radius: 0;
+            border-left: 4px solid var(--accent-apple-blue);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            min-height: 180px;
+            max-height: 400px;
+            pointer-events: auto;
+            opacity: 1;
+            transition: flex 0.3s ease, opacity 0.2s ease;
+        }
+
+        .ai-card.hidden {
+            opacity: 0;
+            flex: 0 0 0%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .ai-card.full-width {
+            flex: 0 0 100%;
+        }
+
+        /* Transcript card - Right side of unified box */
+        .transcript-card {
+            flex: 0 0 40%;
+            background: transparent;
+            border-radius: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 180px;
+            max-height: 400px;
+            pointer-events: auto;
+            opacity: 1;
+            transition: flex 0.3s ease, opacity 0.2s ease;
+        }
+
+        .transcript-card.hidden {
+            opacity: 0;
+            flex: 0 0 0%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .transcript-card.full-width {
+            flex: 0 0 100%;
+        }
+
+        /* Card headers - Mac-style with close button on left */
+        .card-header {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            flex-shrink: 0;
+            position: relative;
+        }
+
+        .card-title {
+            font-weight: 600;
+            color: var(--text-primary-dark);
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            margin: 0;
+        }
+
+        .card-toggle-btn {
+            position: absolute;
+            right: 12px;                /* stick to the right */
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .card-copy-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            padding: 6px 10px;
+            color: var(--text-primary-dark);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            -webkit-app-region: no-drag;
+        }
+
+        .card-copy-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-close-btn {
+            background: #ff5f57;
+            border: none;
+            border-radius: 50%;
+            width: 12px;
+            height: 12px;
+            color: transparent;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            -webkit-app-region: no-drag;
+            line-height: 1;
+            font-size: 0;
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .card-close-btn:hover {
+            background: #ff3b30;
+        }
+
+        .card-close-btn:hover::before {
+            content: '×';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #000;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .card-toggle-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            color: var(--text-primary-dark);
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            -webkit-app-region: no-drag;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+
+        .card-toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Copy button container inside AI card */
+        .ai-card-copy-container {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            z-index: 10;
+        }
+
+        .ai-card .card-content {
+            position: relative;
+            user-select: text;
+            -webkit-user-select: text;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+        }
+
+        .ai-card .card-content * {
+            user-select: text;
+            -webkit-user-select: text;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+        }
+
+        /* Card content areas */
+        .card-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 12px 16px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+        }
+
+        /* Prevent horizontal overflow in AI card content */
+        .ai-card .card-content {
+            overflow-x: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* Ensure text content wraps properly */
+        .ai-card .card-content p,
+        .ai-card .card-content div:not(pre),
+        .ai-card .card-content span:not([class*="language-"]) {
+            white-space: normal;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+        }
+
+        .transcript-card .card-content {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        /* Subtle scrollbar for transcript */
+        .transcript-card .card-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .transcript-card .card-content::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+
+        .transcript-card .card-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .transcript-card .card-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+
+        /* Toast Notification */
+        .toast {
+            position: fixed;
+            top: 50px;
+            left: 20px;
+            right: 20px;
+            background-color: #cc7700;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 2000;
+            display: none;
+            align-items: center;
+            gap: 15px;
+            max-width: none;
+        }
+
+        .toast.show {
+            display: flex;
+        }
+
+        .toast-content a {
+            color: white;
+            text-decoration: underline;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .toast-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            opacity: 0.7;
+            padding: 0 5px;
+            pointer-events: auto;
+            z-index: 2002;
+            position: relative;
+        }
+
+        .toast-close:hover {
+            opacity: 1;
+        }
+
+        .toast-action-btn {
+            background: rgba(255,255,255,.15);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,.25);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background .15s ease;
+            margin-left: 10px;
+            pointer-events: auto;
+            z-index: 2001;
+        }
+
+        .toast-action-btn:hover {
+            background: rgba(255,255,255,.28);
+        }
+
+        /* FINAL say on code blocks — keep indent, no word-splitting, but constrain width */
+        pre[class*="language-"],
+        code[class*="language-"] {
+            white-space: pre !important;      /* spaces + \n exactly as typed   */
+            overflow-wrap: normal !important; /* no forced breaks               */
+            word-break: normal !important;    /* don't split identifiers        */
+            max-width: 100% !important;       /* constrain to container width   */
+            box-sizing: border-box !important;
+        }
+
+        /* Ensure code blocks in AI card are properly contained */
+        .ai-card .card-content pre[class*="language-"] {
+            max-width: calc(100% - 32px); /* Account for padding */
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+    </style>
 </head>
 <body>
-  <!-- Custom context menu for selected text -->
-  <div class="custom-context-menu" id="custom-context-menu">
-    <div class="context-menu-item" id="ask-ai-option">
-      <i class="fas fa-robot"></i> Ask AI
-    </div>
-  </div>
-  
-  <!-- Auth Container -->
-  <div class="auth-container">
-    <div class="auth-header">
-      <h3>Sign In</h3>
-      <button class="close-auth">&times;</button>
-    </div>
-    <form class="auth-form">
-      <div class="auth-status"></div>
-      <input type="email" placeholder="Email" required>
-      <input type="password" placeholder="Password" required>
-      <button type="submit" class="login-button">Continue</button>
-      <p style="margin-top: 15px; font-size: 0.9rem; text-align: center; color: rgba(255, 255, 255, 0.7);" id="create-account-text">If you don't have an account, <a href="#" id="create-account-link" style="color: #4285f4; text-decoration: underline;">create here</a></p>
-    </form>
-    <div class="subscription-link" style="display: none; margin-top: 15px; text-align: center;">
-      <p>You are using the free plan with rate limits.</p>
-      <a href="#" id="subscription-link" style="color: #4285f4; text-decoration: underline;">Upgrade for full features</a>
-    </div>
-  </div>
-  <div class="container">
-    <div class="resize-handle resize-handle-e" id="resize-e"></div>
-    <div class="resize-handle resize-handle-s" id="resize-s"></div>
-    <div class="resize-handle resize-handle-se" id="resize-se"></div>
-    
-    <!-- Main content section -->
-    <div class="main-section">
-      <div class="header">
-        <div class="header-top">
-          <div class="title">
-            <div class="logo">
-              <div class="logo-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Dark blue background with rounded corners -->
-                  <rect x="0" y="0" width="24" height="24" fill="#2b4b6f" rx="5" ry="5" />
-                  
-                  <!-- Hexagon element (purple) -->
-                  <polygon points="12,4 16,7 16,13 12,16 8,13 8,7" fill="#9c5ec6" />
-                  
-                  <!-- Small triangle (teal) -->
-                  <polygon points="12,18 15,21 9,21" fill="#3ecfb2" />
-                  
-                  <!-- Curved line (light yellow) -->
-                  <path d="M6,10 Q12,18 18,10" stroke="#f7e379" stroke-width="2" fill="none" />
-                </svg>
-              </div>
-            </div>
-          </div>
-          <div class="window-controls-container">
-            <div class="window-controls">
-              <button class="transparency-toggle" id="toggle-transparency" title="Toggle Background Transparency">
-                <i class="fas fa-eye"></i> <span>Transparency</span>
-              </button>
-              <button id="minimize" title="Minimize ⌘+B"><i class="fas fa-minus"></i></button>
-              <button id="close" title="Close ⌘+Q "><i class="fas fa-times"></i></button>
-            </div>
-          </div>
-        </div>
-        <div class="header-bottom">
-          <div class="conversation-area" id="conversation-area">
-            <!-- Default placeholder sections -->
-            <div class="interviewer-question">
-              <div class="question-text">Your interview questions will appear here.</div>
-              <div class="question-buttons">
-                <button class="answer-button">Answer</button>
-              </div>
-            </div>
-            <div class="ai-suggestion">
-              <div class="title">AI Suggestions</div>
-              <div>Helpful suggestions and feedback will appear here during your interview.</div>
-            </div>
-            <!-- Conversation messages will be added here dynamically -->
-          </div>
-          <div class="controls-wrapper">
-          <div class="controls">
-            <div class="recording-controls">
-              <button id="toggle-recording" class="interview-button" title="Start Recording">Start Interview</button>
-              <button id="toggle-transcript" title="Show Transcript"><i class="fas fa-chevron-right"></i></button>
-              <div id="plan-limit-message" class="plan-limit-message hidden">All interviews used, to upgrade <a href="#" id="upgrade-link" style="color: #4285f4; text-decoration: underline;">Upgrade here</a></div>
-            </div>
-          </div>
-          <div class="usage-instructions">
-            <ul class="instruction-list">
-              <li><i class="fas fa-play-circle"></i> Click <span class="text-green">"Start Interview"</span> after providing context</li>
-              <li><i class="fas fa-lightbulb"></i> Click <span class="text-blue"> "Answer" </span> after the interviewer has completed asking the question</li>
-              <li><i class="fas fa-expand-alt"></i> Click <span class="text-blue"> "Elaborate" </span> for more detailed answers</li>
-              <li><i class="fas fa-camera"></i> ⌘+B to capture screen, ⌘+H to answer question in screenshot</li>
-              <li id="earphone-instruction-legacy" style="display: none;"><span style="color: #ff4444;"><i class="fas fa-exclamation-triangle"></span></i> <span style="color: #f1e642;">Don't use earphone since it prevents us from listening to interviewer's questions.</span></li>
-              <li id="earphone-instruction-modern" style="display: none;"><i class="fas fa-headphones"></i> Earphones are supported for system audio.</li>
-            </ul>
-          </div>
-          </div>
-        
-        </div>
-      </div>
-      
-      <div class="context-area" id="context-area">
-        <div class="context-title">
-          <span>Interview Context</span>
-          <button id="toggle-context" class="toggle-context" title="Toggle Context Section"><i class="fas fa-chevron-up"></i></button>
-        </div>
-        <div class="saved-context-display" id="saved-context-display"></div> <!-- New element for saved context -->
-        <div class="context-importance">
-          <div class="upload-button-container">
-            <button class="upload-context-btn" id="upload-context-btn"><i class="fas fa-upload"></i> Upload Resume or Job Description</button>
-          </div>
-          <i class="fas fa-exclamation-circle"></i> <strong>Important:</strong> Providing context before your interview helps generate more accurate and relevant AI suggestions.
-        </div>
-        <div class="context-content empty" id="context-content">No context provided yet. Please add your resume, job description, or any relevant information before starting the interview.</div>
+    <!-- Compact draggable bar -->
+    <div class="compact-bar" id="compactBar">
 
-        <div class="context-controls">
-          <input type="text" class="context-input" id="context-text" placeholder="Enter job description, sample question and answer or other relevant information as context" -webkit-app-region="no-drag">
-          <button class="context-btn primary" id="set-text-context"><i class="fas fa-check"></i> Set</button>
-          <input type="file" id="file-input" class="file-input">
+        
+        <!-- Status indicator removed - button states provide sufficient feedback -->
+        
+        <div class="action-buttons">
+            <svg class="app-logo-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <!-- Dark blue background with rounded corners -->
+                <rect x="0" y="0" width="24" height="24" fill="#2b4b6f" rx="5" ry="5" />
+                
+                <!-- Hexagon element (purple) -->
+                <polygon points="12,4 16,7 16,13 12,16 8,13 8,7" fill="#9c5ec6" />
+                
+                <!-- Small triangle (teal) -->
+                <polygon points="12,18 15,21 9,21" fill="#3ecfb2" />
+                
+                <!-- Curved line (light yellow) -->
+                <path d="M6,10 Q12,18 18,10" stroke="#f7e379" stroke-width="2" fill="none" />
+            </svg>
+            <button class="action-btn listen-now-btn" id="recordBtn" title="Start/Stop Recording">
+                  <svg viewBox="0 0 24 24">
+                      <g class="soundwave-bars">
+                          <rect class="bar" x="9" y="8" width="2" height="8" rx="1"/>
+                          <rect class="bar" x="12" y="6" width="2" height="12" rx="1"/>
+                          <rect class="bar" x="15" y="8" width="2" height="8" rx="1"/>
+                      </g>
+                  </svg>
+                  <div class="loading-spinner"></div>
+                  <span class="listen-text">Start Listen <span class="hotkey-hint">(⌘L)</span></span>
+              </button>
+            
+            <button class="action-btn ai-btn" id="aiBtn" title="AI Answer (⌘↵)">
+                <span>Answer <span class="hotkey-hint">(⌘↵)</span></span>
+            </button>
+            
+
         </div>
-      </div>
+        
+        <button class="action-btn expand-btn" id="expandBtn" title="Menu">
+            <svg viewBox="0 0 24 24" fill="white">
+                <path d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z"/>
+            </svg>
+        </button>
+
     </div>
-    <!-- Transcript section -->
-    <div class="transcript-section" id="transcript-section">
-      <button class="transcript-toggle hide-transcript" id="hide-transcript"><i class="fas fa-chevron-left"></i></button>
-      <div class="transcript-title">
-        Transcript
-        <button id="scroll-up-transcript" class="scroll-up-btn" title="Scroll to earlier messages"><i class="fas fa-chevron-up"></i></button>
-      </div>
-      <div class="transcript-content" id="transcript-content">
-        <!-- Transcript messages will be added here dynamically -->
-      </div>
+    <div id="statusBar" class="status-bar"></div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <div class="toast-content">
+            <span id="toast-message"></span>
+            <button id="toast-action" class="toast-action-btn">Open Settings</button>
+        </div>
+        <button id="toast-close" class="toast-close">&times;</button>
     </div>
-  </div>
-  <script src="main-ui.js"></script>
+
+    <!-- Main container that holds pop-ups -->
+    <div id="root">
+        <!-- Unified Panel Stack -->
+        <div id="popupStack">
+            <!-- AI Suggestion Card -->
+            <div class="ai-card" id="aiCard">
+                <div class="card-header">
+                    <!-- ① red close button, fixed to the left -->
+                    <button class="card-close-btn" id="aiCardClose" title="Close"></button>
+
+                    <!-- centred title -->
+                    <div class="card-title">AI Suggestion</div>
+
+                    <!-- ② “T” toggle button, fixed to the right -->
+                    <button class="card-toggle-btn" id="transcriptToggleBtn" title="Transcript">T</button>
+                </div>
+                <div class="card-content" id="aiCardContent">
+                    <div class="placeholder-message">
+                        <p style="color: var(--text-secondary-dark); text-align: center; padding: 40px 20px; font-style: italic;">AI suggestions will appear here when you click the Answer button</p>
+                    </div>
+                    <div class="ai-card-copy-container">
+                        <button class="card-copy-btn" id="aiCardCopy" title="Copy AI text (⌘⇧C)">
+                            Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcript Card -->
+            <div class="transcript-card" id="transcriptCard">
+                <div class="card-header">
+                    <div class="card-title">
+
+                        Transcript
+                    </div>
+                </div>
+                <div class="card-content" id="transcriptCardContent">
+                    <div class="placeholder-message">
+                        <p style="color: var(--text-secondary-dark); text-align: center; padding: 40px 20px; font-style: italic;">Conversation transcript will appear here as you record interviews</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Authentication Container -->
+    <div class="auth-container" id="authContainer">
+        <div class="auth-header">
+            <h3>Sign In</h3>
+            <button class="close-auth" id="closeAuth">&times;</button>
+        </div>
+        <form class="auth-form" id="authForm">
+            <div class="auth-status" id="authStatus"></div>
+            <input type="email" id="emailInput" placeholder="Email" required>
+            <input type="password" id="passwordInput" placeholder="Password" required>
+            <button type="submit" class="login-button">Sign In</button>
+        </form>
+    </div>
+
+
+
+
+
+
+    <!-- Expanded Menu Panel -->
+    <div class="expanded-menu" id="expandedMenu">
+        <div class="menu-header">
+            <button class="menu-control-btn" id="closeExpandedMenu" title="close">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 3L9 9M9 3L3 9"/>
+                    </svg>
+            </button>
+            <div class="menu-title">Menu</div>
+        </div>
+        
+        <!-- User Section -->
+        <div class="menu-section">
+            <div class="user-info" id="userInfo" style="display: none;">
+                <div class="user-avatar">JD</div>
+                <div class="user-details">
+                    <div class="user-name">Jane Doe</div>
+                    <div class="user-status">Premium User</div>
+                </div>
+            </div>
+            
+            <!-- NEW: lives *after* .user-info so it spans the whole width -->
+            <div class="interviews-left-row menu-item" id="interviewsLeftItem" style="display: none;">
+                Interviews Left: <span id="interviewsLeftCount">--</span>
+            </div>
+            
+            <div class="login-prompt" id="loginPrompt">
+                <div style="margin-bottom: 8px;">Sign in to start using the app</div>
+                <button class="login-btn" id="loginBtn">Sign In</button>
+            </div>
+        </div>
+        
+
+        
+        <!-- General Section -->
+        <div class="menu-section">
+            <div class="menu-section-title">General</div>
+            <div class="menu-item" id="logoutItem">
+                <div class="menu-item-content">
+                    <svg class="menu-item-icon" viewBox="0 0 24 24">
+                        <path d="M16,17V14H9V10H16V7L21,12L16,17M14,2A2,2 0 0,1 16,4V6H14V4H5V20H14V18H16V20A2,2 0 0,1 14,22H5A2,2 0 0,1 3,20V4A2,2 0 0,1 5,2H14Z" fill="currentColor"/>
+                    </svg>
+                    <span class="menu-item-text">Sign Out</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Help Section -->
+        <div class="menu-section">
+            <div class="menu-section-title">Help & Support</div>
+            <div class="menu-item" id="helpItem">
+                <div class="menu-item-content">
+                    <svg class="menu-item-icon" viewBox="0 0 24 24">
+                        <path d="M11,18H13V16H11V18M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,6A4,4 0 0,0 8,10H10A2,2 0 0,1 12,8A2,2 0 0,1 14,10C14,12 11,11.75 11,15H13C13,12.75 16,12.5 16,10A4,4 0 0,0 12,6Z" fill="currentColor"/>
+                    </svg>
+                    <span class="menu-item-text">Help Center</span>
+                </div>
+            </div>
+
+            <div class="menu-item" id="minimizeItem">
+                <div class="menu-item-content">
+                    <svg class="menu-item-icon" viewBox="0 0 24 24">
+                        <path d="M20,14H4V10H20" fill="currentColor"/>
+                    </svg>
+                    <span class="menu-item-text">Minimize</span>
+                </div>
+            </div>
+            <div class="menu-item" id="quitItem">
+                <div class="menu-item-content">
+                    <svg class="menu-item-icon" viewBox="0 0 24 24">
+                        <path d="M19,3H5C3.89,3 3,3.89 3,5V9H5V5H19V19H5V15H3V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M10.08,15.58L11.5,17L16.5,12L11.5,7L10.08,8.41L12.67,11H3V13H12.67L10.08,15.58Z" fill="currentColor"/>
+                    </svg>
+                    <span class="menu-item-text">Quit</span>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+
+
+    <script>
+        // Constants from constants.js - updated for dynamic sizing
+        const BAR_HEIGHT = 60;
+        const WINDOW_WIDTH = 600;
+        const MENU_HEIGHT = 600;
+        const MIN_PANEL_HEIGHT = 200;
+        const MAX_PANEL_HEIGHT = 500;
+        const DUAL_PANEL_WIDTH = 800;
+        const CONTENT_PADDING = 24;
+        const HEADER_HEIGHT = 44;
+
+        // Authentication services will be available through window.electron.auth
+
+        // Dragging functionality
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        const compactBar = document.getElementById('compactBar');
+
+        const expandedMenu = document.getElementById('expandedMenu');
+        // Status indicator removed
+        const recordBtn = document.getElementById('recordBtn');
+        const aiBtn = document.getElementById('aiBtn');
+        const expandBtn = document.getElementById('expandBtn');
+
+        const closeExpandedMenu = document.getElementById('closeExpandedMenu');
+
+
+
+
+        
+        // PERMISSION ERROR HANDLING
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toast-message');
+        const toastAction = document.getElementById('toast-action');
+        const toastClose = document.getElementById('toast-close');
+
+
+
+        if(toastClose) {
+            toastClose.addEventListener('click', () => {
+                console.log('Toast close button clicked!');
+                hidePermissionToast();
+                console.log('Toast should now be hidden');
+            });
+        } else {
+            console.error('Toast close button not found!');
+        }
+
+        toastAction.addEventListener('click', (e) => {
+            console.log('Toast action button clicked!');
+            const url = toastAction.dataset.url;
+            console.log('URL from dataset:', url);
+            if (!url) {
+                console.log('No URL found in dataset');
+                return;
+            }
+
+            // Prefer Electron's helper if preload exposed it
+            if (window.electron?.openExternal) {
+                console.log('Using electron.openExternal');
+                window.electron.openExternal(url);
+            } else {
+                console.log('Using window.open fallback');
+                window.open(url, '_blank', 'noopener,noreferrer');
+            }
+        });
+
+        // New unified panel elements
+        const popupStack = document.getElementById('popupStack');
+        const aiCard = document.getElementById('aiCard');
+        const transcriptCard = document.getElementById('transcriptCard');
+        const aiCardClose = document.getElementById('aiCardClose');
+        // transcriptCardClose removed - no longer needed
+        const aiCardCopy = document.getElementById('aiCardCopy');
+
+        // File Upload Handling
+        function setupFileUpload(inputId, fileNameId, clearBtnId) {
+            const fileInput = document.getElementById(inputId);
+            const fileNameDisplay = document.getElementById(fileNameId);
+            const clearButton = document.getElementById(clearBtnId);
+
+            if (fileInput && fileNameDisplay && clearButton) {
+                fileInput.addEventListener('change', function() {
+                    if (this.files && this.files.length > 0) {
+                        fileNameDisplay.textContent = this.files[0].name;
+                        clearButton.style.visibility = 'visible';
+                    } else {
+                        fileNameDisplay.textContent = 'No file chosen';
+                        clearButton.style.visibility = 'hidden';
+                    }
+                });
+            }
+        }
+
+        function clearFile(inputId, fileNameId, clearBtnId) {
+            const fileInput = document.getElementById(inputId);
+            const fileNameDisplay = document.getElementById(fileNameId);
+            const clearButton = document.getElementById(clearBtnId);
+
+            if (fileInput) fileInput.value = ''; // Clear the file input
+            if (fileNameDisplay) fileNameDisplay.textContent = 'No file chosen';
+            if (clearButton) clearButton.style.visibility = 'hidden';
+        }
+
+        setupFileUpload('resumeUpload', 'resumeFileName', 'clearResumeBtn');
+        setupFileUpload('jobDescUpload', 'jobDescFileName', 'clearJobDescBtn');
+
+        // Initialize file upload display
+        clearFile('resumeUpload', 'resumeFileName', 'clearResumeBtn');
+        clearFile('jobDescUpload', 'jobDescFileName', 'clearJobDescBtn');
+
+        
+        // Menu elements
+        const userInfo = document.getElementById('userInfo');
+        const loginPrompt = document.getElementById('loginPrompt');
+        const loginBtn = document.getElementById('loginBtn');
+        const logoutItem = document.getElementById('logoutItem');
+        
+        // Track login state
+        let isLoggedIn = false;
+        let currentUser = null;
+        let userPlan = null;
+
+        // Drag functionality
+        compactBar.addEventListener('mousedown', dragStart);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+
+        function dragStart(e) {
+            if (e.target.closest('.action-btn')) return; // Don't drag when clicking buttons
+            
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+
+            if (e.target === compactBar || e.target.closest('.brand')) {
+                isDragging = true;
+                compactBar.style.cursor = 'grabbing';
+            }
+        }
+
+        function drag(e) {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+
+                xOffset = currentX;
+                yOffset = currentY;
+
+                compactBar.style.transform = `translate(${currentX}px, ${currentY}px)`;
+            }
+        }
+
+        function dragEnd() {
+            initialX = currentX;
+            initialY = currentY;
+            isDragging = false;
+            compactBar.style.cursor = 'move';
+        }
+
+        // Hotkey listener
+        // Set up global hotkey listeners (moved from keydown event to main process)
+        window.electron.onTriggerRecordButton(() => {
+            recordBtn.click();
+        });
+        
+        window.electron.onTriggerAiButton(() => {
+            aiBtn.click();
+        });
+        
+        window.electron.onTriggerTranscriptToggle(() => {
+            toggleTranscriptCard();
+        });
+        
+        window.electron.onTriggerCopyAiText(() => {
+            copyAIText();
+        });
+
+        // Answer interaction functions
+        function elaborateAnswer(button) {
+            const answerText = button.closest('.answer-card').querySelector('.answer-text').textContent;
+            
+            // Visual feedback
+            button.style.background = 'var(--secondary-hover)';
+            button.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24">
+                    <path d="M12,2A2,2 0 0,1 14,4V20A2,2 0 0,1 12,22A2,2 0 0,1 10,20V4A2,2 0 0,1 12,2Z" fill="currentColor"/>
+                </svg>
+                Elaborating...
+            `;
+            
+            // Send elaborate request to backend
+            window.electron.elaborate(answerText);
+            
+            console.log('Elaborating:', answerText);
+        }
+        
+        window.electron.onElaboration((data) => {
+            console.log('Received elaboration:', data);
+
+            // Find the elaborate button and reset it
+            const elaborateButtons = document.querySelectorAll('.elaborate-btn');
+            elaborateButtons.forEach(button => {
+                if (button.innerHTML.includes('Elaborating...')) {
+                    button.disabled = false;
+                    button.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
+                        Elaborate
+                    `;
+                }
+            });
+
+            // Display the elaboration in the AI popup
+            if (data && data.elaboration) {
+                const aiCardContent = document.getElementById('aiCardContent');
+                if (aiCardContent) {
+                    // Create elaboration answer card
+                    const elaborationCard = document.createElement('div');
+                    elaborationCard.className = 'answer-card elaboration-card';
+                    elaborationCard.innerHTML = `
+                        <div class="answer-header">
+                            <div class="answer-title">Elaboration</div>
+                        </div>
+                        <div class="answer-text">${data.elaboration}</div>
+                        <div class="answer-actions">
+                            <button class="copy-btn" onclick="copyAnswer(this)">
+                                <svg width="14" height="14" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" fill="currentColor"/></svg>
+                                Copy
+                            </button>
+                        </div>
+                    `;
+                    
+                    // Append the elaboration card to the AI popup content
+                    aiCardContent.appendChild(elaborationCard);
+                    
+                    // Ensure the AI popup is visible
+                    const aiCard = document.getElementById('aiCard');
+                    if (aiCard && !aiCard.classList.contains('show')) {
+                        toggleAICard();
+                    }
+                }
+            }
+        });
+
+        function showElaboration(answerId) {
+            const elaborations = {
+                1: "Let me elaborate on system design: First, for scalability, I'd implement horizontal scaling using load balancers like NGINX or AWS ALB to distribute traffic across multiple server instances. For the database layer, I'd use sharding to partition data across multiple databases, ensuring each shard handles a specific range of data. Additionally, I'd implement caching strategies using Redis or Memcached to reduce database load and improve response times.",
+                2: "Here's my detailed problem-solving approach: I start by gathering all requirements and constraints, then I break the problem into smaller, manageable components. For example, when I worked on optimizing a slow API, I first identified bottlenecks through profiling, then systematically addressed each issue - database query optimization, caching implementation, and code refactoring. I always document my thought process and test each solution incrementally."
+            };
+            
+        }
+
+        function copyAnswer(button) {
+            const answerText = button.closest('.answer-card').querySelector('.answer-text').textContent;
+            
+            // Copy to clipboard
+            navigator.clipboard.writeText(answerText).then(() => {
+                // Visual feedback
+                const originalContent = button.innerHTML;
+                button.innerHTML = `
+                    <svg width="14" height="14" viewBox="0 0 24 24">
+                        <path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z" fill="currentColor"/>
+                    </svg>
+                    Copied!
+                `;
+                button.style.background = 'var(--secondary-hover-transparent)'; /* Assuming this is for a subtle success indication */
+                button.style.color = 'var(--secondary)';
+                
+                setTimeout(() => {
+                    button.innerHTML = originalContent;
+                    /* Assuming default button styles are handled by CSS classes, so direct style removal or reset might be better here if applicable */
+                    /* For now, let's use a generic light background and text color if no specific variable fits */
+                    button.style.background = 'rgba(255, 255, 255, 0.1)'; 
+                    button.style.color = 'var(--primary-foreground)'; /* Or a more general text color variable if available */
+                }, 1500);
+            }).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+        }
+
+        // Button functionality
+        let isRecording = false;
+        let isProcessing = false;
+
+        recordBtn.addEventListener('click', () => {
+            if (!isLoggedIn) {
+                loginBtn.click();
+                return;
+            }
+
+            if (!isRecording) {
+                // Start recording - show loading state first
+                window.electron.startRecording();
+                isRecording = true;
+                recordBtn.classList.add('loading');
+                
+                // Update button text
+                const listenText = recordBtn.querySelector('.listen-text');
+                const hotkeyHint = recordBtn.querySelector('.hotkey-hint').outerHTML;
+                listenText.innerHTML = `Stop Listen ${hotkeyHint}`;
+            } else {
+                // Stop recording
+                window.electron.stopRecording();
+                isRecording = false;
+                recordBtn.classList.remove('active', 'loading');
+                
+                // Update button text
+                const listenText = recordBtn.querySelector('.listen-text');
+                const hotkeyHint = recordBtn.querySelector('.hotkey-hint').outerHTML;
+                listenText.innerHTML = `Start Listen ${hotkeyHint}`;
+            }
+        });
+
+        aiBtn.addEventListener('click', () => {
+            // Close expanded menu if open
+            const wasExpandedVisible = expandedMenu.classList.contains('show');
+            expandedMenu.classList.remove('show');
+            expandBtn.classList.remove('active');
+            
+            // Update popup manager for expanded menu close
+            if (wasExpandedVisible && window.PopupManager) {
+                window.PopupManager.onPopupHide();
+            }
+            
+            const transcriptMessages = document.querySelectorAll('.transcript-message .message-text');
+
+            // Get the latest transcript text for AI suggestion
+            let transcriptText = '';
+            if (transcriptMessages.length > 0) {
+                // Get the last few messages for context (up to 3 messages)
+                const recentMessages = Array.from(transcriptMessages).slice(-3);
+                transcriptText = recentMessages.map(msg => msg.textContent).join(' ');
+            }
+            
+            // If no transcript available, use a default prompt
+            if (!transcriptText.trim()) {
+                transcriptText = 'Please provide interview suggestions and tips.';
+            }
+            
+            // Check if recording is active and there's a transcript
+            if (!isRecording || transcriptMessages.length === 0) {
+                // Display an error message in the unified AI card
+                const aiCardContent = document.getElementById('aiCardContent');
+                if (aiCardContent) {
+                    aiCardContent.innerHTML = `<div class="answer-card"><div class="answer-text" style="color: var(--error-red);">Error: Please start recording and ensure there is a transcript before requesting AI suggestions.</div></div>`;
+                }
+                toggleAICard(); // Show unified AI card with error
+                return; // Stop further execution
+            }
+
+            // Send get-suggestion request
+            console.log('[UI] Requesting AI suggestion for text:', transcriptText);
+            window.electron.getSuggestion(transcriptText);
+            
+            // Clear previous content and show loading in unified AI card
+            const aiCardContent = document.getElementById('aiCardContent');
+            if (aiCardContent) {
+                aiCardContent.innerHTML = '<div class="answer-card"><div class="answer-text">Getting AI suggestion...</div></div>'; 
+            }
+            
+            // Show the unified AI card
+            if (!aiCard.classList.contains('show')) {
+                toggleAICard();
+            }
+        });
+
+
+        
+        // Expand menu functionality
+        expandBtn.addEventListener('click', () => {
+            // Close AI popup and preferences panel if open
+
+            
+            const wasVisible = expandedMenu.classList.contains('show');
+            expandedMenu.classList.toggle('show');
+            expandBtn.classList.toggle('active', expandedMenu.classList.contains('show'));
+
+            const stack = document.getElementById('popupStack');
+            if (expandedMenu.classList.contains('show')) {
+                stack.classList.add('blurred');
+            } else {
+                stack.classList.remove('blurred');
+            }
+            
+            // Update popup manager
+            if (window.PopupManager) {
+                if (!wasVisible && expandedMenu.classList.contains('show')) {
+                    window.PopupManager.onPopupShow();
+                } else if (wasVisible && !expandedMenu.classList.contains('show')) {
+                    window.PopupManager.onPopupHide();
+                }
+            }
+            
+            // Update window size based on new state
+            updateWindowSize();
+        });
+        
+        closeExpandedMenu.addEventListener('click', () => {
+            expandedMenu.classList.remove('show');
+            expandBtn.classList.remove('active');
+            
+            // Update popup manager
+            if (window.PopupManager) {
+                window.PopupManager.onPopupHide();
+            }
+            
+            // Update window size based on new state
+            updateWindowSize();
+        });
+        
+        // New unified panel event listeners
+        if (aiCardClose) {
+            aiCardClose.addEventListener('click', () => {
+                // Close entire panel (both AI and transcript cards)
+                aiCard.classList.remove('show');
+                transcriptCard.classList.remove('show');
+                if (aiBtn) aiBtn.classList.remove('active');
+                updateUnifiedPanels();
+                
+                // Update popup manager since all cards are now hidden
+                if (window.PopupManager) {
+                    window.PopupManager.onPopupHide();
+                }
+            });
+        }
+        
+        // Transcript toggle button event listener
+        const transcriptToggleBtn = document.getElementById('transcriptToggleBtn');
+        if (transcriptToggleBtn) {
+            transcriptToggleBtn.addEventListener('click', () => {
+                toggleTranscriptCard();
+            });
+        }
+        
+        if (aiCardCopy) {
+            aiCardCopy.addEventListener('click', copyAIText);
+        }
+        
+        // AI button event listener is already defined above with proper logic
+
+
+
+        // Helper functions to manage window size and panel positions
+        function updateWindowSize() {
+            const menuVisible = expandedMenu.classList.contains('show');
+            const unifiedPanelVisible = popupStack && popupStack.classList.contains('show');
+            const aiVisible = aiCard && aiCard.classList.contains('show');
+            const transcriptVisible = transcriptCard && transcriptCard.classList.contains('show');
+            const toastVisible = toast && toast.classList.contains('show');
+            
+            let width = WINDOW_WIDTH;
+            let height = BAR_HEIGHT;
+            
+            if (menuVisible) {
+                // Menu has fixed height
+                height = MENU_HEIGHT;
+                width = WINDOW_WIDTH;
+            } else if (unifiedPanelVisible) {
+                // Calculate optimal size based on actual content
+                const optimalSize = calculateOptimalPanelSize(aiVisible, transcriptVisible);
+                width = optimalSize.width;
+                height = optimalSize.height;
+            } else if (toastVisible) {
+                // Toast is visible, ensure window is tall enough
+                height = BAR_HEIGHT + 100; // Toast height + padding + margin + positioning
+            }
+            
+            window.electron.resizeWindow(width, height);
+        }
+        
+        function calculateOptimalPanelSize(aiVisible, transcriptVisible) {
+            const compactBarHeight = 60; // Height of the command bar
+            const headerHeight = 44; // Height of card headers
+            const padding = 24; // Padding around popup stack
+            const minContentHeight = 120; // Minimum content area height
+            const maxContentHeight = 400; // Maximum content area height to prevent oversized windows
+            
+            let totalWidth = WINDOW_WIDTH;
+            let totalHeight = compactBarHeight + padding;
+            
+            if (aiVisible && transcriptVisible) {
+                // Both panels visible - use wider layout
+                totalWidth = Math.min(800, Math.max(650, WINDOW_WIDTH));
+                
+                // Calculate content height based on actual content
+                let maxContentHeightNeeded = minContentHeight;
+                
+                if (aiCard && aiCard.querySelector('.card-content')) {
+                    const aiContent = aiCard.querySelector('.card-content');
+                    const aiContentHeight = Math.min(maxContentHeight, Math.max(minContentHeight, aiContent.scrollHeight));
+                    maxContentHeightNeeded = Math.max(maxContentHeightNeeded, aiContentHeight);
+                }
+                
+                if (transcriptCard && transcriptCard.querySelector('.card-content')) {
+                    const transcriptContent = transcriptCard.querySelector('.card-content');
+                    const transcriptContentHeight = Math.min(maxContentHeight, Math.max(minContentHeight, transcriptContent.scrollHeight));
+                    maxContentHeightNeeded = Math.max(maxContentHeightNeeded, transcriptContentHeight);
+                }
+                
+                totalHeight += headerHeight + maxContentHeightNeeded;
+                
+            } else if (aiVisible || transcriptVisible) {
+                // Single panel visible - use compact width
+                totalWidth = WINDOW_WIDTH;
+                
+                const activeCard = aiVisible ? aiCard : transcriptCard;
+                if (activeCard && activeCard.querySelector('.card-content')) {
+                    const content = activeCard.querySelector('.card-content');
+                    const contentHeight = Math.min(maxContentHeight, Math.max(minContentHeight, content.scrollHeight));
+                    totalHeight += headerHeight + contentHeight;
+                } else {
+                    totalHeight += headerHeight + minContentHeight;
+                }
+            }
+            
+            return {
+                width: totalWidth,
+                height: totalHeight
+            };
+        }
+
+
+
+        // New unified panel management functions
+        function updateUnifiedPanels() {
+            const aiVisible = aiCard && aiCard.classList.contains('show');
+            const transcriptVisible = transcriptCard && transcriptCard.classList.contains('show');
+            
+            if (aiVisible || transcriptVisible) {
+                popupStack.classList.add('show');
+                
+                // Adjust widths based on visibility
+                if (aiVisible && transcriptVisible) {
+                    aiCard.style.flex = '0 0 60%';
+                    transcriptCard.style.flex = '0 0 40%';
+                } else if (aiVisible) {
+                    aiCard.style.flex = '0 0 100%';
+                } else if (transcriptVisible) {
+                    transcriptCard.style.flex = '0 0 100%';
+                }
+                
+                // Delay window resize to allow content to render
+                setTimeout(() => {
+                    updateWindowSize();
+                }, 50);
+            } else {
+                popupStack.classList.remove('show');
+                updateWindowSize();
+            }
+        }
+        
+        // Debounced resize function for content changes
+        let resizeTimeout;
+        function debouncedWindowResize() {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                updateWindowSize();
+            }, 100);
+        }
+        
+        // Content change observer for dynamic resizing
+        function setupContentObserver() {
+            if (typeof ResizeObserver !== 'undefined') {
+                const resizeObserver = new ResizeObserver(debouncedWindowResize);
+                
+                if (aiCard && aiCard.querySelector('.card-content')) {
+                    resizeObserver.observe(aiCard.querySelector('.card-content'));
+                }
+                
+                if (transcriptCard && transcriptCard.querySelector('.card-content')) {
+                    resizeObserver.observe(transcriptCard.querySelector('.card-content'));
+                }
+            }
+        }
+        
+        function toggleAICard() {
+            if (!aiCard) return;
+            
+            const wasVisible = aiCard.classList.contains('show');
+            aiCard.classList.toggle('show');
+            
+            // Update AI button state
+            if (aiBtn) {
+                aiBtn.classList.toggle('active', !wasVisible);
+            }
+            
+            updateUnifiedPanels();
+            
+            // Update popup manager
+            if (window.PopupManager) {
+                if (!wasVisible) {
+                    window.PopupManager.onPopupShow();
+                } else {
+                    const transcriptVisible = transcriptCard && transcriptCard.classList.contains('show');
+                    if (!transcriptVisible) {
+                        window.PopupManager.onPopupHide();
+                    }
+                }
+            }
+        }
+        
+        function toggleTranscriptCard() {
+            if (!transcriptCard) return;
+            
+            const wasVisible = transcriptCard.classList.contains('show');
+            transcriptCard.classList.toggle('show');
+            
+            updateUnifiedPanels();
+            
+            // Update popup manager
+            if (window.PopupManager) {
+                if (!wasVisible) {
+                    window.PopupManager.onPopupShow();
+                } else {
+                    const aiVisible = aiCard && aiCard.classList.contains('show');
+                    if (!aiVisible) {
+                        window.PopupManager.onPopupHide();
+                    }
+                }
+            }
+        }
+        
+        function copyAIText() {
+            const aiContent = aiCard && aiCard.querySelector('#aiCardContent');
+            if (aiContent) {
+                const text = aiContent.textContent || aiContent.innerText;
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        // Show brief feedback
+                        if (aiCardCopy) {
+                            const originalText = aiCardCopy.textContent;
+                            aiCardCopy.textContent = 'Copied!';
+                            setTimeout(() => {
+                                aiCardCopy.textContent = originalText;
+                            }, 1000);
+                        }
+                    }).catch(err => {
+                        console.error('Failed to copy text:', err);
+                    });
+                }
+            }
+        }
+
+        
+        // Login/Logout functionality
+        function updateLoginState() {
+            if (isLoggedIn && currentUser) {
+                userInfo.style.display = 'flex';
+                loginPrompt.style.display = 'none';
+                
+                // Update user info display
+                const userAvatar = userInfo.querySelector('.user-avatar');
+                const userName = userInfo.querySelector('.user-name');
+                const userStatus = userInfo.querySelector('.user-status');
+                
+                if (userAvatar && userName && userStatus) {
+                    // Set avatar initials
+                    const initials = currentUser.email ? currentUser.email.substring(0, 2).toUpperCase() : 'U';
+                    userAvatar.textContent = initials;
+                    
+                    // Set user name (use email if no display name)
+                    userName.textContent = currentUser.user_metadata?.full_name || currentUser.email || 'User';
+                    
+                    // Set plan status
+                    const planType = userPlan?.plan_type || 'free';
+                    let planDisplay;
+                    if (planType === 'monthly_subscription') {
+                        planDisplay = 'Unlimited Copilot';
+                        updateInterviewsLeftDisplay(null); // Hide for pro plan
+                    } else {
+                        planDisplay = planType.charAt(0).toUpperCase() + planType.slice(1) + ' Plan';
+                        updateInterviewsLeftDisplay(userPlan?.interviews_remaining);
+                    }
+                    userStatus.textContent = planDisplay;
+                }
+                logoutItem.style.display = 'block';
+            } else {
+                userInfo.style.display = 'none';
+                loginPrompt.style.display = 'block';
+                // Hide interviews left item if user is not logged in
+                updateInterviewsLeftDisplay(null);
+                logoutItem.style.display = 'none';
+            }
+        }
+        
+        loginBtn.addEventListener('click', () => {
+            // Hide expanded menu when sign in is clicked
+            const wasExpandedVisible = expandedMenu.classList.contains('show');
+            expandedMenu.classList.remove('show');
+            
+            // Update popup manager for expanded menu close
+            if (wasExpandedVisible && window.PopupManager) {
+                window.PopupManager.onPopupHide();
+            }
+            expandBtn.classList.remove('active');
+            showAuthContainer();
+        });
+        
+        logoutItem.addEventListener('click', async () => {
+            try {
+                await window.auth.logout();
+                isLoggedIn = false;
+                currentUser = null;
+                userPlan = null;
+                updateLoginState();
+                const wasExpandedVisible = expandedMenu.classList.contains('show');
+                expandedMenu.classList.remove('show');
+                expandBtn.classList.remove('active');
+                
+                // Update popup manager for expanded menu close
+                if (wasExpandedVisible && window.PopupManager) {
+                    window.PopupManager.onPopupHide();
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+                
+            } finally {
+                updateInterviewsLeftDisplay(null); // Clear interviews display on logout
+            }
+        });
+        
+
+
+
+
+
+        // Menu item click handlers
+        
+        const interviewsLeftItem = document.getElementById('interviewsLeftItem'); // Get the interviews left item
+        const interviewsLeftCount = document.getElementById('interviewsLeftCount'); // Get the span for the count
+
+        // Function to update the display of interviews left
+        function updateInterviewsLeftDisplay(count) {
+            if (interviewsLeftItem && interviewsLeftCount) {
+                if (typeof count === 'number' && count >= 0) {
+                    interviewsLeftCount.textContent = count;
+                    interviewsLeftItem.style.display = 'flex'; // Show the item
+                } else {
+                    interviewsLeftCount.textContent = '--';
+                    interviewsLeftItem.style.display = 'none'; // Hide the item if no valid count
+                }
+            }
+        }
+
+        // Add click handler for interviews left item to open interm.ai
+        if (interviewsLeftItem) {
+            interviewsLeftItem.addEventListener('click', () => {
+                if (window.electron && window.electron.openExternal) {
+                    window.electron.openExternal('https://interm.ai');
+                } else {
+                    window.open('https://interm.ai', '_blank');
+                }
+            });
+            // Add cursor pointer style
+            interviewsLeftItem.style.cursor = 'pointer';
+        }
+
+        // Add click handler for user profile to open interm.ai
+        if (userInfo) {
+            userInfo.addEventListener('click', () => {
+                if (window.electron && window.electron.openExternal) {
+                    window.electron.openExternal('https://interm.ai');
+                } else {
+                    window.open('https://interm.ai', '_blank');
+                }
+            });
+            // Add cursor pointer style
+            userInfo.style.cursor = 'pointer';
+        }
+
+        
+        // ── Help-Center modal wiring ──────────────────────────
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize content observer for dynamic resizing
+            setupContentObserver();
+            
+            const helpModal       = document.getElementById('helpCenterModal');
+            const closeHelpModal  = document.getElementById('closeHelpModal');
+            const helpMenuItem    = document.getElementById('helpItem');
+
+            function showHelpModal() {
+                helpModal.style.display = 'flex';
+                // Allow click-outside to close
+                helpModal.addEventListener('click', e => {
+                    if (e.target === helpModal) hideHelpModal();
+                });
+                if (window.PopupManager) window.PopupManager.onPopupShow();
+            }
+            function hideHelpModal() {
+                helpModal.style.display = 'none';
+                if (window.PopupManager) window.PopupManager.onPopupHide();
+            }
+
+            helpMenuItem.addEventListener('click', showHelpModal);
+            closeHelpModal.addEventListener('click', hideHelpModal);
+        });
+        
+
+        
+        document.getElementById('minimizeItem').addEventListener('click', () => {
+             window.electron.minimize();
+         });
+        
+        document.getElementById('quitItem').addEventListener('click', () => {
+             window.electron.quit();
+         });
+        
+        // Check for existing session on startup
+        async function checkExistingSession() {
+            try {
+                console.log('[UI] Checking for existing session...');
+                const sessionValid = await window.auth.checkSession();
+                
+                if (sessionValid) {
+                    console.log('[UI] Valid session found, updating UI state');
+                    isLoggedIn = true;
+                    
+                    // Get user info from the auth service
+                    try {
+                        const userInfo = await window.auth.getUserInfo();
+                        if (userInfo && userInfo.user) {
+                            currentUser = userInfo.user;
+                            userPlan = userInfo.plan;
+                            console.log('[UI] User info loaded:', currentUser.email, 'Plan:', userPlan?.plan_type, 'Interviews Left:', userPlan?.interviews_remaining);
+                        }
+                    } catch (userInfoError) {
+                        console.warn('[UI] Could not load user info:', userInfoError);
+                    }
+                } else {
+                    console.log('[UI] No valid session found');
+                    isLoggedIn = false;
+                    currentUser = null;
+                    userPlan = null;
+                }
+                
+                updateLoginState();
+            } catch (error) {
+                console.error('[UI] Error checking session:', error);
+                isLoggedIn = false;
+                currentUser = null;
+                userPlan = null;
+                updateLoginState();
+            }
+        }
+        
+        // Initialize login state
+        checkExistingSession();
+
+        // Authentication functionality
+        const authContainer = document.getElementById('authContainer');
+        const authForm = document.getElementById('authForm');
+        const emailInput = document.getElementById('emailInput');
+        const passwordInput = document.getElementById('passwordInput');
+        const authStatus = document.getElementById('authStatus');
+        const closeAuth = document.getElementById('closeAuth');
+
+        // Show auth container function
+        function showAuthContainer() {
+            if (authContainer) {
+                // Force display and visibility
+                authContainer.style.display = 'block';
+                authContainer.style.visibility = 'visible';
+                authContainer.style.opacity = '1';
+                authContainer.classList.add('show');
+                
+                // Focus on email input
+                if (emailInput) {
+                    setTimeout(() => emailInput.focus(), 100);
+                }
+                
+                // Update popup manager
+                if (window.PopupManager) {
+                    window.PopupManager.onPopupShow();
+                }
+            }
+        }
+
+        // Hide auth container function
+        function hideAuthContainer() {
+            authContainer.classList.remove('show');
+            // Reset inline styles to let CSS take over
+            authContainer.style.display = '';
+            authContainer.style.visibility = '';
+            authContainer.style.opacity = '';
+            authForm.reset();
+            authStatus.className = 'auth-status';
+            authStatus.textContent = '';
+            if (window.PopupManager) {
+                window.PopupManager.onPopupHide();
+            }
+        }
+
+        // Show auth status
+        function showAuthStatus(message, isError = false) {
+            authStatus.textContent = message;
+            authStatus.className = `auth-status ${isError ? 'auth-error' : 'auth-success'}`;
+        }
+
+        // Close auth container
+        closeAuth.addEventListener('click', hideAuthContainer);
+
+        // Handle form submission
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = emailInput.value.trim();
+            const password = passwordInput.value;
+            
+            if (!email || !password) {
+                showAuthStatus('Please enter both email and password', true);
+                return;
+            }
+            
+            const loginButton = authForm.querySelector('.login-button');
+            loginButton.disabled = true;
+            loginButton.textContent = 'Signing in...';
+            
+            try {
+                // Use the auth API from preload.js
+                const result = await window.auth.signIn(email, password);
+                
+                if (!result.success) {
+                     showAuthStatus(result.error || 'Sign in failed', true);
+                 } else {
+                     showAuthStatus('Sign in successful!', false);
+                     
+                     // Set logged in state and update UI
+                     isLoggedIn = true;
+                     
+                     // Get updated user info
+                     try {
+                         const userInfo = await window.auth.getUserInfo();
+                         if (userInfo && userInfo.user) {
+                             currentUser = userInfo.user;
+                             userPlan = userInfo.plan;
+                         }
+                     } catch (userInfoError) {
+                         console.warn('[UI] Could not load user info after login:', userInfoError);
+                     }
+                     
+                     // Update login state and hide auth container after a short delay
+                     setTimeout(() => {
+                         updateLoginState();
+                         hideAuthContainer();
+                     }, 1000);
+                 }
+            } catch (error) {
+                console.error('Sign in error:', error);
+                showAuthStatus('An error occurred during sign in', true);
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = 'Sign In';
+            }
+        });
+
+        // Close auth container when clicking outside
+        authContainer.addEventListener('click', (e) => {
+            if (e.target === authContainer) {
+                hideAuthContainer();
+            }
+        });
+
+        // Keyboard shortcut to show auth removed - conflicts with start listening hotkey
+
+        // Expose showAuthContainer globally for potential use
+        window.showAuthContainer = showAuthContainer;
+
+        
+        // Suggestion button functionality
+        document.querySelectorAll('.suggestion-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (btn.textContent === 'Use Suggestion') {
+                    btn.textContent = 'Applied ✓';
+                    btn.style.background = 'var(--secondary)'; /* Or a specific success color if defined */
+                    setTimeout(() => {
+                        btn.closest('.ai-suggestion').style.opacity = '0.5';
+                    }, 500);
+                } else if (btn.textContent === 'Dismiss') {
+                    btn.closest('.ai-suggestion').style.display = 'none';
+                }
+            });
+        });
+
+        // Close popups when clicking outside
+        document.addEventListener('click', (e) => {
+            
+            // Close expanded menu if clicking outside
+            if (!expandedMenu.contains(e.target) && !expandBtn.contains(e.target)) {
+                const wasExpandedVisible = expandedMenu.classList.contains('show');
+                expandedMenu.classList.remove('show');
+                expandBtn.classList.remove('active');
+                
+                // Update popup manager for expanded menu close
+                if (wasExpandedVisible && window.PopupManager) {
+                    window.PopupManager.onPopupHide();
+                }
+            }
+
+            // Close preferences panel if clicking outside
+
+        });
+
+        // Simulate AI suggestions appearing
+        setTimeout(() => {
+            if (Math.random() > 0.5) {
+                aiBtn.style.animation = 'pulse 1s ease-in-out 3';
+            }
+        }, 5000);
+
+        // Transcript integration - Connect with backend transcript data
+        let transcriptContent;
+        let unifiedTranscriptContent;
+        let currentInterimElement = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            transcriptContent = document.getElementById('transcriptContent');
+            unifiedTranscriptContent = document.getElementById('transcriptCardContent');
+        });
+        
+        // Function to format timestamp
+        function formatTimestamp() {
+            const now = new Date();
+            return now.toLocaleTimeString('en-US', { 
+                hour12: true, 
+                hour: 'numeric', 
+                minute: '2-digit' 
+            });
+        }
+        
+        // Function to add transcript message
+        function addTranscriptMessage(text, speaker = 'You', isInterim = false, hideSpeaker = false) {
+            const placeholder = document.getElementById('transcript-placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+            if (!text || text.trim() === '') return;
+
+            const speakerHtml = hideSpeaker ? '' : `<span class="speaker-label">${speaker}</span>`;
+            
+            if (isInterim) {
+                // Handle interim transcript (real-time updates)
+                if (currentInterimElement) {
+                    // Update existing interim message
+                    const messageText = currentInterimElement.querySelector('.message-text');
+                    if (messageText) {
+                        messageText.textContent = text;
+                    }
+                    
+                    // Also update in unified transcript card
+                    if (unifiedTranscriptContent) {
+                        const unifiedInterimElements = unifiedTranscriptContent.querySelectorAll('.transcript-message.interim');
+                        const lastUnifiedInterim = unifiedInterimElements[unifiedInterimElements.length - 1];
+                        if (lastUnifiedInterim) {
+                            const unifiedMessageText = lastUnifiedInterim.querySelector('.message-text');
+                            if (unifiedMessageText) {
+                                unifiedMessageText.textContent = text;
+                            }
+                        }
+                    }
+                } else {
+                    // Create new interim message
+                    const messageDiv = document.createElement('div');
+                    const speakerClass = speaker ? (speaker.toLowerCase() === 'you' ? 'you' : 'interviewer') : 'interviewer';
+                    messageDiv.className = `transcript-message ${speakerClass} interim`;
+                    messageDiv.innerHTML = `
+                        <div class="message-header">
+                            ${speakerHtml}
+                            <span class="message-time">${formatTimestamp()}</span>
+                        </div>
+                        <div class="message-text">${text}</div>
+                    `;
+                    
+                    // Add interim styling
+                    messageDiv.style.opacity = '0.7';
+                    messageDiv.style.fontStyle = 'italic';
+                    
+                    if (transcriptContent) {
+                        transcriptContent.appendChild(messageDiv);
+                    }
+                    
+                    // Hide placeholder when first message appears
+                    hidePlaceholderMessages();
+                    
+                    // Also add to unified transcript card
+                    if (unifiedTranscriptContent) {
+                        const unifiedMessageDiv = messageDiv.cloneNode(true);
+                        unifiedTranscriptContent.appendChild(unifiedMessageDiv);
+                        unifiedTranscriptContent.scrollTop = unifiedTranscriptContent.scrollHeight;
+                    }
+                    
+                    currentInterimElement = messageDiv;
+                    
+                    // Auto-scroll to bottom
+                    if (transcriptContent) {
+                        transcriptContent.scrollTop = transcriptContent.scrollHeight;
+                    }
+                }
+            } else {
+                // Handle final transcript
+                if (currentInterimElement) {
+                    // Convert interim to final
+                    currentInterimElement.classList.remove('interim');
+                    currentInterimElement.style.opacity = '1';
+                    currentInterimElement.style.fontStyle = 'normal';
+                    
+                    const messageText = currentInterimElement.querySelector('.message-text');
+                    if (messageText) {
+                        messageText.textContent = text;
+                    }
+                    
+                    // Also update in unified transcript card
+                    if (unifiedTranscriptContent) {
+                        const unifiedInterimElements = unifiedTranscriptContent.querySelectorAll('.transcript-message.interim');
+                        const lastUnifiedInterim = unifiedInterimElements[unifiedInterimElements.length - 1];
+                        if (lastUnifiedInterim) {
+                            lastUnifiedInterim.classList.remove('interim');
+                            lastUnifiedInterim.style.opacity = '1';
+                            lastUnifiedInterim.style.fontStyle = 'normal';
+                            const unifiedMessageText = lastUnifiedInterim.querySelector('.message-text');
+                            if (unifiedMessageText) {
+                                unifiedMessageText.textContent = text;
+                            }
+                        }
+                    }
+                    
+                    currentInterimElement = null;
+                } else {
+                    // Create new final message
+                    const messageDiv = document.createElement('div');
+                    const speakerClass = speaker ? (speaker.toLowerCase() === 'you' ? 'you' : 'interviewer') : 'interviewer';
+                    messageDiv.className = `transcript-message ${speakerClass}`;
+                    messageDiv.innerHTML = `
+                        <div class="message-header">
+                            ${speakerHtml}
+                            <span class="message-time">${formatTimestamp()}</span>
+                        </div>
+                        <div class="message-text">${text}</div>
+                    `;                    
+                    
+                    if (transcriptContent) {
+                        transcriptContent.appendChild(messageDiv);
+                    }
+                    
+                    // Hide placeholder when first message appears
+                    hidePlaceholderMessages();
+                    
+                    // Also add to unified transcript card
+                    if (unifiedTranscriptContent) {
+                        const unifiedMessageDiv = messageDiv.cloneNode(true);
+                        unifiedTranscriptContent.appendChild(unifiedMessageDiv);
+                        unifiedTranscriptContent.scrollTop = unifiedTranscriptContent.scrollHeight;
+                    }
+                    
+                    // Auto-scroll to bottom
+                    if (transcriptContent) {
+                        transcriptContent.scrollTop = transcriptContent.scrollHeight;
+                    }
+                }
+                
+                // Trigger window resize after transcript update
+                debouncedWindowResize();
+            }
+        }
+        
+        // Function to hide placeholder messages when transcript content appears
+        function hidePlaceholderMessages() {
+            // Hide placeholder in transcript card
+            const transcriptPlaceholder = document.querySelector('#transcriptCardContent .placeholder-message');
+            if (transcriptPlaceholder) {
+                transcriptPlaceholder.style.display = 'none';
+            }
+            
+            // Hide placeholder in unified transcript
+            const unifiedPlaceholder = document.querySelector('#transcriptContent .placeholder-message');
+            if (unifiedPlaceholder) {
+                unifiedPlaceholder.style.display = 'none';
+            }
+        }
+        
+        // Function to clear existing demo content
+        function clearDemoContent() {
+            // Remove demo messages but keep the structure
+            const demoMessages = transcriptContent.querySelectorAll('.transcript-message');
+            demoMessages.forEach(msg => {
+                if (!msg.classList.contains('interim')) {
+                    msg.remove();
+                }
+            });
+        }
+        
+        // Listen for transcript events from backend
+        if (window.electron && window.electron.onTranscript) {
+            window.electron.onTranscript((data) => {              
+                // Remove placeholder if it exists
+                const placeholder = document.getElementById('transcript-placeholder');
+                if (placeholder) {
+                    placeholder.parentElement.remove();
+                }
+                
+                // Determine speaker based on available data
+                let speaker = 'Interviewer'; // Default
+                
+                let hideSpeaker = false;
+                // For SOX (macOS < 15): Use speaker diarization if available
+                if (data.speakerInfo && data.speakerInfo.hasSpeakerInfo && data.speakerInfo.segments && data.speakerInfo.segments.length > 0) {
+                    // Use the role from the first segment (speaker diarization)
+                    const firstSegment = data.speakerInfo.segments[0];
+                    if (firstSegment.role === 'me' || firstSegment.role === 'INTERVIEWEE') {
+                        speaker = 'You';
+                    } else if (firstSegment.role === 'interviewer' || firstSegment.role === 'INTERVIEWER') {
+                        speaker = 'Interviewer';
+                    }
+                } else {
+                    // For macOS 15+: Use source-based detection
+                    speaker = data.source === 'microphone' ? 'You' : 'Interviewer';
+                    hideSpeaker = true;
+                }
+                addTranscriptMessage(data.text || data.transcript, speaker, false, hideSpeaker);
+            });
+        }
+        
+        // Listen for interim transcript events from backend
+        if (window.electron && window.electron.onInterimTranscript) {
+            window.electron.onInterimTranscript((data) => {
+                
+                // Remove placeholder if it exists
+                const placeholder = document.getElementById('transcript-placeholder');
+                if (placeholder) {
+                    placeholder.parentElement.remove();
+                }
+                
+                // Determine speaker based on available data
+                let speaker = 'Interviewer'; // Default
+                
+                // For SOX (macOS < 15): Use speaker diarization if available
+                if (data.speakerInfo && data.speakerInfo.hasSpeakerInfo && data.speakerInfo.segments && data.speakerInfo.segments.length > 0) {
+                    // Use the role from the first segment (speaker diarization)
+                    const firstSegment = data.speakerInfo.segments[0];
+                    if (firstSegment.role === 'me' || firstSegment.role === 'INTERVIEWEE') {
+                        speaker = 'You';
+                    } else if (firstSegment.role === 'interviewer' || firstSegment.role === 'INTERVIEWER') {
+                        speaker = 'Interviewer';
+                    }
+                } else {
+                    // For macOS 15+: Use source-based detection
+                    speaker = data.source === 'microphone' ? 'You' : 'Interviewer';
+                }
+                addTranscriptMessage(data.text || data.transcript, speaker, true);
+            });
+        }
+        
+        // Listen for recording status to manage transcript state
+        if (window.electron && window.electron.onRecordingStatus) {
+            window.electron.onRecordingStatus((data) => {
+                if (data.isRecording) {
+                    console.log('Recording started - transcript ready');
+                    // Switch from loading to active state
+                    recordBtn.classList.remove('loading');
+                    recordBtn.classList.add('active');
+                    // Optionally clear previous session transcript
+                    // clearDemoContent();
+                } else {
+                    console.log('Recording stopped');
+                    // Finalize any interim transcript
+                    if (currentInterimElement) {
+                        currentInterimElement.classList.remove('interim');
+                        currentInterimElement.style.opacity = '1';
+                        currentInterimElement.style.fontStyle = 'normal';
+                        currentInterimElement = null;
+                    }
+                }
+            });
+        }
+        
+        // Function to process markdown and apply syntax highlighting
+        function processMarkdownContent(text) {
+            // Convert markdown to HTML with proper code block handling
+            let processedText = text;
+            
+            // Process code blocks with language detection
+            processedText = processedText.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+                const language = lang || 'text';
+                const escapedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<pre><code class="language-${language}">${escapedCode}</code></pre>`;
+            });
+            
+            // Process inline code
+            processedText = processedText.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // Process headers
+            processedText = processedText.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, title) => {
+                const level = hashes.length;
+                return `<h${level}>${title}</h${level}>`;
+            });
+            
+            // Process bold text
+            processedText = processedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // Process italic text
+            processedText = processedText.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            
+            // Process lists
+            processedText = processedText.replace(/^[-*+]\s+(.+)$/gm, '<li>$1</li>');
+            processedText = processedText.replace(/((<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+            
+            // Process numbered lists
+            processedText = processedText.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+            
+            // Process line breaks, but not inside <pre> blocks
+            processedText = processedText.replace(
+                /(<pre[\s\S]*?<\/pre>)|(\n)/g,
+                (match, preBlock, newline) => {
+                    return preBlock || '<br>';
+                }
+            );
+            
+            return processedText;
+        }
+
+        // Function to add or update the AI suggestion card
+        let currentStreamingCard = null;
+        let isStreaming = false;
+
+        function addSuggestionMessage(text, isFinal = true, source = null) {
+            const aiCardContent = document.getElementById('aiCardContent');
+            if (!aiCardContent) {
+                console.error('[UI] AI card content area not found.');
+                return;
+            }
+
+            // Create source label if provided
+            const sourceLabel = source === 'voice' ? '<span class="source-label voice-label">🎤 Voice Question</span>' : 
+                               source === 'screenshot' ? '<span class="source-label screenshot-label">📸 Screenshot</span>' : '';
+
+            if (!isStreaming || !currentStreamingCard) {
+                // Start new streaming session - clear previous content
+                aiCardContent.innerHTML = '';
+                isStreaming = true;
+                
+                // Create new answer card for streaming
+                currentStreamingCard = document.createElement('div');
+                currentStreamingCard.className = 'answer-card';
+                currentStreamingCard.innerHTML = `
+                    <div class="answer-header">
+                        ${sourceLabel}
+                    </div>
+                    <div class="answer-text"></div>
+                    <div class="answer-actions" style="display: none;">
+                        <button class="copy-btn" onclick="copyAnswer(this)">
+                            <svg width="14" height="14" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" fill="currentColor"/></svg>
+                            Copy
+                        </button>
+                    </div>
+                `;
+                aiCardContent.appendChild(currentStreamingCard);
+            }
+
+            // Update the text content progressively
+            const answerTextElement = currentStreamingCard.querySelector('.answer-text');
+            if (answerTextElement) {
+                // Process the text for markdown and code highlighting
+                const processedText = processMarkdownContent(text);
+                answerTextElement.innerHTML = processedText;
+                
+                // Apply syntax highlighting to code blocks
+                if (window.Prism) {
+                    Prism.highlightAllUnder(answerTextElement);
+                }
+
+                // Render math equations
+                if (window.MathJax) {
+                    MathJax.typesetPromise([answerTextElement]).catch((err) => {
+                        console.warn('MathJax rendering error:', err);
+                    });
+                }
+            }
+
+            if (isFinal) {
+                // Show copy button when streaming is complete
+                const actionsElement = currentStreamingCard.querySelector('.answer-actions');
+                if (actionsElement) {
+                    actionsElement.style.display = 'block';
+                }
+                isStreaming = false;
+                currentStreamingCard = null;
+            }
+
+            // Ensure the unified AI card is visible
+            if (!aiCard.classList.contains('show')) {
+                toggleAICard();
+            }
+            
+            // Trigger window resize after content update
+            debouncedWindowResize();
+        }
+
+        // Listen for AI suggestion responses
+        if (window.electron && window.electron.onSuggestion) {
+            window.electron.onSuggestion((data) => {
+                console.log('[UI] Received AI suggestion:', data);
+                const suggestionText = data.text || 'No suggestion available.';
+                addSuggestionMessage(suggestionText, data.isFinal, data.source);
+            });
+        }
+
+        // Listen for streaming AI suggestion chunks
+        if (window.electron && window.electron.onSuggestionChunk) {
+            window.electron.onSuggestionChunk((data) => {
+                console.log('[UI] Received AI suggestion chunk:', data);
+                const suggestionText = data.fullText || '';
+                addSuggestionMessage(suggestionText, data.isFinal, data.source);
+            });
+        }
+
+        // Listen for suggestion processing events (progress indicator)
+        if (window.electron && window.electron.onSuggestionProcessing) {
+            window.electron.onSuggestionProcessing((data) => {
+                console.log('[UI] AI suggestion processing started:', data);
+                
+                // Show progress indicator in AI card
+                const aiCardContent = document.getElementById('aiCardContent');
+                if (aiCardContent) {
+                    aiCardContent.innerHTML = `
+                        <div class="answer-card">
+                            <div class="answer-header">
+                                <svg class="loading-spinner" width="16" height="16" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.416" stroke-dashoffset="31.416">
+                                        <animate attributeName="stroke-dasharray" dur="2s" values="0 31.416;15.708 15.708;0 31.416" repeatCount="indefinite"/>
+                                        <animate attributeName="stroke-dashoffset" dur="2s" values="0;-15.708;-31.416" repeatCount="indefinite"/>
+                                    </circle>
+                                </svg>
+                                Processing Screenshot...
+                            </div>
+                            <div class="answer-text">Analyzing screenshot and generating AI suggestions...</div>
+                        </div>
+                    `;
+                }
+                
+                // Ensure the AI card is visible
+                const aiCard = document.getElementById('aiCard');
+                if (aiCard && !aiCard.classList.contains('show')) {
+                    toggleAICard();
+                }
+            });
+        }
+
+        
+        // Listen for error events from backend
+        if (window.electron && window.electron.onError) {
+            window.electron.onError((data) => {
+                console.log('[UI] Error received:', data);
+                
+                // Reset button state if recording was attempted but failed
+                if (isRecording && (data.type === 'plan-limit' || data.message?.includes('User ID is required'))) {
+                    isRecording = false;
+                    recordBtn.classList.remove('active', 'loading');
+                    
+                    // Reset button text to original state
+                    const listenText = recordBtn.querySelector('.listen-text');
+                    const hotkeyHint = recordBtn.querySelector('.hotkey-hint').outerHTML;
+                    listenText.innerHTML = `Start Listen ${hotkeyHint}`;
+                }
+                
+                const statusBar = document.getElementById('statusBar');
+                if (statusBar) {
+                    let errorMessage = '';
+                    if (data.message && data.message.includes('User ID is required')) {
+                        errorMessage = 'Authentication Required: Please log in to start recording.';
+                    } else if (data.type === 'plan-limit') {
+                        errorMessage = 'Plan limit reached. Please upgrade your plan.';
+                    } else {
+                        errorMessage = data.message || 'An error occurred.';
+                    }
+                    statusBar.textContent = errorMessage;
+                    statusBar.classList.add('show');
+                    setTimeout(() => {
+                        statusBar.classList.remove('show');
+                    }, 8000);
+                }
+            });
+        }
+        
+        // Plan limit reached events are now handled via the error event above
+    </script>
+
+    <!-- Popup Manager Script -->
+    <script src="popup-manager.js"></script>
+
+
+
+
+    <!-- Help Center Modal -->
+    <div id="helpCenterModal" class="plan-limit-modal" style="display: none;">
+        <div class="plan-limit-modal-content">
+            <div class="plan-limit-modal-header">
+                <h3>Help Center</h3>
+                <button class="close-plan-modal" id="closeHelpModal">&times;</button>
+            </div>
+            <div class="plan-limit-modal-message">
+                <h4 style="margin-top: 0; color: #333; font-size: 16px;">Audio Recording</h4>
+                <p>For the best transcript quality and AI suggestions, we recommend using earphones. Earphone support is now available for all macOS versions.</p>
+                
+                <h4 style="margin-top: 20px; color: #333; font-size: 16px;">Screenshot Feature</h4>
+                <p>Take a screenshot and get AI-powered analysis and suggestions:</p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    <li><strong>Cmd+Shift+Enter</strong> (macOS) or <strong>Ctrl+Shift+Enter</strong> (Windows) - Capture screenshot and analyze with AI</li>
+                    <li>The AI will identify issues, errors, or problems in your screenshot and provide solutions</li>
+                    <li>Perfect for debugging code, analyzing error messages, or getting help with UI issues</li>
+                </ul>
+                
+                <p style="margin-top: 20px;">Still have questions? Email us at 
+                   <a href="mailto:founders@interm.ai" style="color: #66b3ff; text-decoration: none;">founders@interm.ai</a></p>
+            </div>
+        </div>
+    </div>
+    </div> <!-- End of root container -->
+    <!-- Microphone capture for older macOS versions -->
+    <script src="microphone-capture.js"></script>
+    
+    <script>
+        // Handle microphone capture events from main process
+        if (window.electron) {
+            // Listen for server messages forwarded by main process
+            window.electron.onMicrophoneCaptureStart && window.electron.onMicrophoneCaptureStart(() => {
+                document.dispatchEvent(new CustomEvent('start-microphone-capture'));
+            });
+            
+            window.electron.onMicrophoneCaptureStop && window.electron.onMicrophoneCaptureStop(() => {
+                document.dispatchEvent(new CustomEvent('stop-microphone-capture'));
+            });
+        }
+    </script>
+
+    <!-- Permission Notification Handler -->
+    <script>
+        // Permission notification will use the main toast implementation
+        let currentPermissionType = null;
+        
+        // Permission messages will come from backend
+        
+        // Show permission toast
+        function showPermissionToast(errorData) {
+            currentPermissionType = errorData.permissionType;
+            
+            if (errorData.message) {
+                // Use the message from backend
+                toastMessage.textContent = errorData.message;
+                
+                // Set the deep link URL if provided
+                if (errorData.url) {
+                    toastAction.dataset.url = errorData.url;   // stash the deep-link
+                    toastAction.style.display = 'inline-block';
+                } else {
+                    toastAction.style.display = 'none';
+                }
+                
+                toast.classList.add('show');
+                
+                // Update window size to accommodate toast
+                updateWindowSize();
+                
+                // No auto-hide - user must manually close
+            }
+        }
+        
+        // Hide permission toast
+        function hidePermissionToast() {
+            toast.classList.remove('show');
+            
+            // Update window size after hiding toast
+            updateWindowSize();
+        }
+        
+        // Toast close button is already handled in the earlier implementation
+        
+        // Listen for permission error events from main process
+        if (window.electron) {
+            window.electron.onPermError((errorData) => {
+                console.log('Permission error received:', errorData);
+                if (errorData.isPersistent) {
+                    showPermissionToast(errorData);
+                }
+            });
+        }
+        
+        // Optional: Add manual permission check functions for testing
+        window.checkMicrophonePermission = async () => {
+            if (window.electron) {
+                const hasPermission = await window.electron.invoke('check-microphone-permission');
+                console.log('Microphone permission:', hasPermission);
+                return hasPermission;
+            }
+        };
+        
+        window.checkScreenPermission = async () => {
+            if (window.electron) {
+                const hasPermission = await window.electron.invoke('check-screen-permission');
+                console.log('Screen permission:', hasPermission);
+                return hasPermission;
+            }
+        };
+    </script>
 </body>
 </html>

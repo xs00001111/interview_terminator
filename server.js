@@ -1,7 +1,3 @@
-// Audio format optimization - Use optimal sample rates for speech recognition
-// Based on Google Cloud Speech-to-Text recommendations: 16kHz is optimal for speech
-const encoding = 'LINEAR16';
-const sampleRateHertz = 16000; // Optimal for speech recognition per Google's documentation
 const languageCode = 'en-US';
 const streamingLimit = 60000;
 
@@ -55,7 +51,7 @@ const { hideBin } = require('yargs/helpers');
 const events = require('events');
 const dotenv = require('dotenv');
 const dotenvExpand = require('dotenv-expand');
-const SoxAudioCapture = require(path.join(__dirname, 'sox-audio-capture.js'));
+
 
 const log = require('electron-log');
 
@@ -151,22 +147,7 @@ function setupBinPath() {
   }
 }
 
-// Async sox verification
-async function verifySoxBinary() {
-  const soxBinPath = process.env.NODE_ENV === 'production'
-    ? path.join(process.resourcesPath, 'bin', 'sox')
-    : path.join(__dirname, 'bin', 'sox');
 
-  try {
-    await fs.promises.access(soxBinPath, fs.constants.X_OK);
-    console.log(`Sox binary found and is executable at: ${soxBinPath}`);
-    return true;
-  } catch (err) {
-    console.error(`Sox binary not found or not executable at: ${soxBinPath}`);
-    console.error(`Error details: ${err.message}`);
-    return false;
-  }
-}
 
 // Consolidate environment loading
 function loadEnvironmentVariables() {
@@ -204,7 +185,6 @@ const GOOGLE_CLOUD_SPEECH_API_KEY = process.env.GOOGLE_CLOUD_SPEECH_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GOOGLE_GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY;
 
-// Lazy initialization of API clients
 function initializeGoogleSpeechClient() {
   if (!client) {
     const {GoogleAuth: GoogleAuthLib, grpc: grpcLib} = require('google-gax');
@@ -225,11 +205,27 @@ function initializeGoogleSpeechClient() {
   return client;
 }
 
+const https = require('https');
+
+const openaiAgent = new https.Agent({
+  keepAlive: true,
+});
+
+// Create HTTP agent for Gemini API with connection pooling
+const geminiAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000, // Keep connections alive for 30 seconds
+  maxSockets: 10, // Maximum number of sockets per host
+  maxFreeSockets: 5, // Maximum number of free sockets per host
+  timeout: 60000, // Socket timeout
+});
+
 function initializeOpenAI() {
   if (!openai) {
     const { OpenAI: OpenAILib } = require('openai');
     openai = new OpenAILib({
-      apiKey: OPENAI_API_KEY
+      apiKey: OPENAI_API_KEY,
+      httpAgent: openaiAgent,
     });
   }
   return openai;
@@ -238,8 +234,23 @@ function initializeOpenAI() {
 function initializeGemini() {
   if (!genAI) {
     const { GoogleGenerativeAI: GeminiLib } = require('@google/generative-ai');
-    genAI = new GeminiLib(GOOGLE_GEMINI_API_KEY);
-    model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    
+    // Configure Gemini with custom fetch that uses our HTTP agent
+    const customFetch = (url, options = {}) => {
+      // Only apply agent for HTTPS requests to Gemini API
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return fetch(url, {
+          ...options,
+          agent: geminiAgent
+        });
+      }
+      return fetch(url, options);
+    };
+    
+    genAI = new GeminiLib(GOOGLE_GEMINI_API_KEY, {
+      fetch: customFetch
+    });
+    model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", generationConfig: {temperature: 0.3, maxOutputTokens: 2048, topK: 32} });
   }
   return { genAI, model };
 }
@@ -253,42 +264,36 @@ let chatHistory = [];
 let isRecording = false;
 let recordingStream = null;
 let recordingTimer = null; // Timer for limiting recording duration
+
+// Timing tracking for startup latency
+let recordingStartClickTime = null;
+let streamsReadyTime = null;
+let firstAudioDataTime = null;
 // Remove scHelperProcess variable
 
-// Remove useScreenCaptureKit constant
 
 // Swift audio capture process
 let swiftAudioProcess = null;
 
-// SoX audio capture instance
-let soxAudioCapture = null;
+
 
 // OS version detection for Swift audio capture compatibility
 function getMacOSVersion() {
   if (process.platform !== 'darwin') {
     return null; // Not macOS
   }
-  
+
   try {
     const release = os.release();
-    // macOS version mapping: Darwin kernel version to macOS version
-    // macOS 15 (Sequoia) = Darwin 24.x
-    // macOS 14 (Sonoma) = Darwin 23.x
-    // macOS 13 (Ventura) = Darwin 22.x
-    // macOS 12 (Monterey) = Darwin 21.x
     const majorVersion = parseInt(release.split('.')[0]);
-    
-    // Convert Darwin version to macOS version
+
+    // macOS 15 (Sequoia) is Darwin 24.x
     if (majorVersion >= 24) {
       return { major: 15, minor: 0, isSupported: true }; // macOS 15+
-    } else if (majorVersion === 23) {
-      return { major: 14, minor: 0, isSupported: false }; // macOS 14
-    } else if (majorVersion === 22) {
-      return { major: 13, minor: 0, isSupported: false }; // macOS 13
-    } else if (majorVersion === 21) {
-      return { major: 12, minor: 0, isSupported: false }; // macOS 12
     } else {
-      return { major: 11, minor: 0, isSupported: false }; // macOS 11 or older
+      // For versions older than macOS 15, we'll use the dual-stream method
+      const macVersion = majorVersion - 4; // Approximate mapping
+      return { major: macVersion, minor: 0, isSupported: false };
     }
   } catch (error) {
     console.error('Error detecting macOS version:', error);
@@ -303,70 +308,32 @@ let swiftAudioCaptureSupported = false;
 if (osVersion) {
   swiftAudioCaptureSupported = osVersion.isSupported;
   console.log(`Detected macOS ${osVersion.major}.${osVersion.minor} (Darwin ${os.release()})`);
-  console.log(`Swift audio capture supported: ${swiftAudioCaptureSupported}`);
+  // console.log(`Swift audio capture supported: ${swiftAudioCaptureSupported}`);
 } else if (process.platform === 'darwin') {
-  console.log('Running on macOS but version detection failed - disabling Swift audio capture');
+  // console.log('Running on macOS but version detection failed - disabling Swift audio capture');
   swiftAudioCaptureSupported = false;
 } else {
-  console.log(`Running on ${process.platform} - Swift audio capture not available`);
+  // console.log(`Running on ${process.platform} - Swift audio capture not available`);
   swiftAudioCaptureSupported = false;
 }
 
 // Audio source selection
 let useSwiftAudioCapture = swiftAudioCaptureSupported; // Use Swift only if supported
 
-
-
-
-function startRecordingWithSox() {
-  // Start the speech recognition streams first for minimal latency
-  const streamStartTime = Date.now();
-  startStream();
-  const streamDuration = Date.now() - streamStartTime;
-  console.log(`⏱️ [LATENCY] Speech recognition streams started: ${streamDuration}ms`);
+function startScreenCaptureKitAndMicrophone() {
+  console.log('Starting microphone capture via getUserMedia...');
   
-  // Initialize SoX audio capture if not already created
-  if (!soxAudioCapture) {
-    soxAudioCapture = new SoxAudioCapture({
-      sampleRateHertz: sampleRateHertz
-    });
-    
-    // Set up event handlers
-    soxAudioCapture.on('error', (err) => {
-      const errorMessage = err && err.message ? err.message : 'Unknown SoX recording error';
-      process.send({ type: 'error', data: { message: `Audio recording error: ${errorMessage}` } });
-      isRecording = false;
-    });
-    
-    soxAudioCapture.on('started', () => {
-      console.log('SoX audio capture started successfully');
-    });
-    
-    soxAudioCapture.on('stopped', () => {
-      console.log('SoX audio capture stopped');
-    });
-    
-    soxAudioCapture.on('end', () => {
-      console.log('SoX audio capture ended');
-    });
-  }
-  
-  // Start SoX recording
-  soxAudioCapture.startRecording();
-  recordingStream = soxAudioCapture.getRecordingStream();
-  
-  // Pipe SoX mixed audio stream to microphone processing pipeline
-  if (recordingStream && microphoneAudioInputStreamTransform) {
-    recordingStream.pipe(microphoneAudioInputStreamTransform);
-    console.log('✅ SoX stream piped to microphone processing pipeline');
-  } else {
-    console.error('❌ Failed to pipe SoX stream - recordingStream or microphoneAudioInputStreamTransform is null');
-  }
+  // Signal the renderer process to start getUserMedia microphone capture
+  process.send({ type: 'start-microphone-capture' });
+
+  console.log('Microphone capture request sent to renderer.');
 }
+
+
 
 async function startRecordingWithSwiftCapture() {
   const captureStartTime = Date.now();
-  console.log('Starting Swift audio capture tool...');
+  // console.log('Starting Swift audio capture tool...');
   
   // Start the speech recognition streams first for minimal latency
   const streamStartTime = Date.now();
@@ -374,9 +341,6 @@ async function startRecordingWithSwiftCapture() {
   const streamDuration = Date.now() - streamStartTime;
   console.log(`⏱️ [LATENCY] Speech recognition streams started: ${streamDuration}ms`);
   
-  if (audioPreInitialized) {
-    console.log('✅ Using pre-verified Swift audio tool');
-  }
   startSwiftProcess();
   const captureDuration = Date.now() - captureStartTime;
   console.log(`⏱️ [LATENCY] Swift capture startup took: ${captureDuration}ms`);
@@ -384,7 +348,7 @@ async function startRecordingWithSwiftCapture() {
 
 function startSwiftProcess() {
   const startTime = Date.now();
-  console.log('⏱️ [LATENCY] Starting Swift audio process...');
+  // console.log('⏱️ [LATENCY] Starting Swift audio process...');
   
   const swiftToolPath = process.env.NODE_ENV === 'production'
     ? path.join(process.resourcesPath, 'bin', 'AudioCapture')
@@ -401,14 +365,18 @@ function startSwiftProcess() {
     console.error('Swift audio process error:', err);
     process.send({ type: 'error', data: { message: `Swift audio capture error: ${err.message}` } });
     
-    // Fallback to sox
-    console.log('Falling back to SoX for audio capture');
-    // useSwiftAudioCapture = false;
-    startRecordingWithSox();
+    // TODO: Implement fallback for non-macOS 15+ versions
+    console.log('Swift audio capture failed. Need to implement fallback.');
   });
   
   swiftAudioProcess.on('close', (code) => {
     console.log(`Swift audio process exited with code ${code}`);
+    if (code === 2) {
+      // Screen recording permission denied
+      sendPermissionError('screen-recording', 'denied');
+      return;
+    }
+    
     if (isRecording) {
       // If we're still supposed to be recording, try to restart
       setTimeout(() => {
@@ -433,7 +401,7 @@ function startSwiftProcess() {
     // Measure time to first data
     if (!firstDataReceived) {
       const timeToFirstData = Date.now() - swiftProcessStartTime;
-      console.log(`⏱️ [LATENCY] Time to first Swift audio data: ${timeToFirstData}ms`);
+      // // console.log(`⏱️ [LATENCY] Time to first Swift audio data: ${timeToFirstData}ms`);
       firstDataReceived = true;
     }
 
@@ -453,7 +421,7 @@ function startSwiftProcess() {
           if (systemAudioInputStreamTransform) {
             // Convert from 32-bit float to 16-bit LINEAR16 for Google Speech API
             const convertedChunk = convertFloat32ToLinear16(audioChunk);
-            // console.log(`🔊 System audio data received via stdout: ${audioChunk.length} bytes -> ${convertedChunk.length} bytes`);
+            // // console.log(`🔊 System audio data received via stdout: ${audioChunk.length} bytes -> ${convertedChunk.length} bytes`);
             systemAudioInputStreamTransform.write(convertedChunk);
           }
         } catch (error) {
@@ -489,7 +457,7 @@ function startSwiftProcess() {
           if (microphoneAudioInputStreamTransform) {
             // Convert from 32-bit float to 16-bit LINEAR16 for Google Speech API
             const convertedChunk = convertFloat32ToLinear16(audioChunk);
-            //console.log(`🎤 Microphone audio data received via stderr: ${audioChunk.length} bytes -> ${convertedChunk.length} bytes`);
+            // //console.log(`🎤 Microphone audio data received via stderr: ${audioChunk.length} bytes -> ${convertedChunk.length} bytes`);
             microphoneAudioInputStreamTransform.write(convertedChunk);
           }
         } catch (error) {
@@ -507,63 +475,38 @@ function startSwiftProcess() {
 
 
 function startRecording() {
-  if (isRecording) return;
+  if (isRecording) {
+    console.log('Already recording.');
+    return;
+  }
   
-  const overallStartTime = Date.now();
-  console.log('⏱️ [LATENCY] Starting overall recording process...');
+  // Track timing from user click to streams ready
+  recordingStartClickTime = Date.now();
+  console.log('🎯 [TIMING] User clicked "Start Listening" - beginning audio capture startup');
   
   isRecording = true;
-  audioInput = [];
-  lastAudioInput = [];
-  restartCounter = 0;
+  process.send({ type: 'recording-started' });
+
+  const overallStartTime = Date.now();
   
-  // Initialize microphone audio variables
-  microphoneAudioInput = [];
-  lastMicrophoneAudioInput = [];
-  microphoneRestartCounter = 0;
-  
-  // Initialize system audio variables
-  systemAudioInput = [];
-  lastSystemAudioInput = [];
-  systemAudioRestartCounter = 0;
-  
-  // Create audio streams if they don't exist
-  if (!microphoneAudioInputStreamTransform) {
-    console.error('Microphone audio input stream transform not initialized');
-    return;
-  }
-  
-  if (!systemAudioInputStreamTransform) {
-    console.error('System audio input stream transform not initialized');
-    return;
-  }
-  
-  // Use Swift audio capture if supported, fallback to SoX if needed
-  if (useSwiftAudioCapture && swiftAudioCaptureSupported) {
-    console.log('Using Swift audio capture (macOS 15+ detected)');
-    const swiftStartTime = Date.now();
+  // Reset dual stream manager for new recording session
+  dualStreamManager.stopConcurrentProcessing();
+
+  if (useSwiftAudioCapture) {
     startRecordingWithSwiftCapture();
-    
-    // Log overall startup time after a brief delay to allow for initialization
-    setTimeout(() => {
-      const overallDuration = Date.now() - overallStartTime;
-      console.log(`⏱️ [LATENCY] Overall recording startup completed: ${overallDuration}ms`);
-    }, 100);
   } else {
-    if (process.platform === 'darwin' && !swiftAudioCaptureSupported) {
-      console.log(`Using SoX for audio capture (macOS ${osVersion ? osVersion.major : 'unknown'} detected - Swift capture requires macOS 15+)`);
-    } else {
-      console.log('Using SoX for audio capture');
-    }
-    const soxStartTime = Date.now();
-    startRecordingWithSox();
-    
-    // Log overall startup time after a brief delay to allow for initialization
-    setTimeout(() => {
-      const overallDuration = Date.now() - overallStartTime;
-      console.log(`⏱️ [LATENCY] Overall recording startup completed: ${overallDuration}ms`);
-    }, 100);
+    // On older macOS versions, use ScreenCaptureKit for system audio
+    // and getUserMedia for microphone audio - enabling dual stream processing
+    console.log('🔄 Starting dual stream audio capture (system + microphone)');
+    startSwiftProcess(); // For system audio
+    startScreenCaptureKitAndMicrophone(); // For microphone
+    startStream();
   }
+
+  setTimeout(() => {
+    const overallDuration = Date.now() - overallStartTime;
+    console.log(`⏱️ [LATENCY] Overall recording startup completed: ${overallDuration}ms`);
+  }, 100);
 }
 
 // Stop the recording and speech recognition
@@ -573,6 +516,10 @@ async function stopRecording() {
   // Set recording state to false before stopping streams
   // to prevent error handlers from firing during intentional shutdown
   isRecording = false;
+  
+  // Stop dual stream concurrent processing
+  dualStreamManager.stopConcurrentProcessing();
+  console.log('🛑 Dual stream processing stopped');
   
   // Clear the recording timer if it exists
   if (recordingTimer) {
@@ -602,17 +549,6 @@ async function stopRecording() {
         console.error(`Non-fatal system audio recognize stream error: ${errorMessage}`);
       }
       systemAudioRecognizeStream = null;
-    }
-    
-    // Stop SoX audio capture if it's running
-    if (soxAudioCapture && soxAudioCapture.getIsRecording()) {
-      try {
-        soxAudioCapture.stopRecording();
-        recordingStream = null;
-      } catch (soxError) {
-        const errorMessage = soxError && soxError.message ? soxError.message : 'unknown error';
-        console.error(`Non-fatal SoX stop error: ${errorMessage}`);
-      }
     }
     
     // Stop the recording stream (fallback for direct stream handling)
@@ -649,7 +585,7 @@ async function stopRecording() {
       try {
         swiftAudioProcess.kill('SIGTERM');
         swiftAudioProcess = null;
-        console.log('Swift audio process terminated');
+        // console.log('Swift audio process terminated');
       } catch (killError) {
         const errorMessage = killError && killError.message ? killError.message : 'unknown error';
         console.error(`Non-fatal Swift process kill error: ${errorMessage}`);
@@ -671,6 +607,11 @@ async function stopRecording() {
     // Reset system audio arrays
     systemAudioInput = [];
     lastSystemAudioInput = [];
+    
+    // Reset timing tracking variables
+    recordingStartClickTime = null;
+    streamsReadyTime = null;
+    firstAudioDataTime = null;
     
     // Clear audio buffers and timers
     microphoneAudioBuffer = [];
@@ -757,6 +698,17 @@ process.on('message', async (message) => { // Make handler async
     if (isRecording) {
       await stopRecording();
       process.send({ type: 'recording-status', data: { isRecording: false } });
+    }
+  } else if (message.type === 'start-microphone-capture') {
+    // Signal renderer to start getUserMedia microphone capture
+    process.send({ type: 'start-microphone-capture' });
+  } else if (message.type === 'stop-microphone-capture') {
+    // Signal renderer to stop getUserMedia microphone capture
+    process.send({ type: 'stop-microphone-capture' });
+  } else if (message.type === 'microphone-data') {
+    // Handle microphone audio data from renderer
+    if (message.data && microphoneAudioInputStreamTransform) {
+      microphoneAudioInputStreamTransform.write(message.data);
     }
   } else if (message.type === 'retrieve-context') {
     // Skip context retrieval if interview is already in progress
@@ -1025,7 +977,7 @@ async function elaborate(text) {
       
       const elaboratedResponse = result.response.text();
       console.log('[DEBUG] Received Gemini response');
-      process.send({ type: 'elaboration', data: { text: elaboratedResponse } });
+      process.send({ type: 'elaboration', data: { elaboration: elaboratedResponse } });
     } else if (AI_PROVIDER === 'openai') {
       console.log('[DEBUG] Calling OpenAI API');
       
@@ -1046,7 +998,7 @@ async function elaborate(text) {
       });
       const elaboratedResponse = result.choices[0].message.content;
       console.log('[DEBUG] Received OpenAI response');
-      process.send({ type: 'elaboration', data: { text: elaboratedResponse } });
+      process.send({ type: 'elaboration', data: { elaboration: elaboratedResponse } });
     }
   } catch (error) {
     const errorMessage = error && error.message ? error.message : 'unknown error';
@@ -1061,6 +1013,40 @@ let fileContext = "";
 let fileContentPart = null;
 let documentSummary = "";
 let extractedContent = "";
+
+// Performance optimization caches
+const promptCache = new Map(); // Cache for frequently used prompts
+const contextCache = new Map(); // Cache for context data
+let lastProcessedTime = 0;
+const MIN_PROCESSING_INTERVAL = 200; // Minimum 200ms between processing requests
+
+// Optimized prompt templates for faster generation
+const OPTIMIZED_PROMPTS = {
+  screenshot: `Analyze this screenshot and provide a concise technical solution:
+
+• For code issues: Identify problems and provide corrected code with proper syntax highlighting
+• For errors: Diagnose root cause and provide step-by-step solutions  
+• For math: Use LaTeX notation ($...$ inline, $$...$$ block)
+• For architecture: Suggest improvements and best practices
+• Otherwise: Provide helpful insights and optimization tips
+
+Use markdown formatting. Be concise but comprehensive.`,
+  
+  withContext: `Analyze this screenshot and provide a concise technical solution:
+
+• For code issues: Identify problems and provide corrected code with proper syntax highlighting
+• For errors: Diagnose root cause and provide step-by-step solutions  
+• For math: Use LaTeX notation ($...$ inline, $$...$$ block)
+• For architecture: Suggest improvements and best practices
+• Otherwise: Provide helpful insights and optimization tips
+
+Use markdown formatting. Be concise but comprehensive.
+
+### Context Information:
+{context}
+
+Reference context when relevant.`
+};
 
 async function generateDocumentSummary() {
   if (!argv.file) return;
@@ -1301,27 +1287,6 @@ function getSpeechConfig() {
     enableSeparateRecognitionPerChannel: false, // Single channel processing
   };
   
-  // Check macOS version for speaker diarization behavior
-  const macOSVersion = getMacOSVersion();
-  const isMacOS15Plus = macOSVersion && macOSVersion.isSupported;
-  
-  // For macOS 15+: Disable speaker diarization since we have separate streams
-  // For older macOS with SoX: Enable speaker diarization for mixed audio stream
-  if (isMacOS15Plus) {
-    baseConfig.enableSpeakerDiarization = false;
-    console.log('🎯 Speaker diarization disabled for macOS 15+ (separate audio streams)');
-  } else if (!useSwiftAudioCapture && !swiftAudioCaptureSupported) {
-    baseConfig.diarizationConfig = {
-      enableSpeakerDiarization: true,
-      minSpeakerCount: 2,
-      maxSpeakerCount: 2
-    };
-    console.log('🎯 Speaker diarization enabled for SoX audio capture (older macOS)');
-  } else {
-    baseConfig.enableSpeakerDiarization = false;
-    console.log('🎯 Speaker diarization disabled for Swift audio capture');
-  }
-  
   return baseConfig;
 }
 
@@ -1357,7 +1322,6 @@ let newSystemAudioStream = true;
 let systemAudioBridgingOffset = 0;
 let lastSystemAudioTranscriptWasFinal = false;
 // Initialize global variable to track the last speaker role
-global.lastSpeakerRole = 'INTERVIEWER'; // Default first speaker is INTERVIEWER
 
 // Pre-initialization variables
 let speechClientPreInitialized = false;
@@ -1391,18 +1355,39 @@ function startStream() {
   if (!isRecording) {
     return;
   }
-  
   // Always start microphone stream
   startMicrophoneStream();
+  startSystemAudioStream();
   
-  // Only start system audio stream if using Swift audio capture (dual stream)
-  // SoX provides a mixed stream (mic + system audio) that goes through the microphone pipeline
-  if (useSwiftAudioCapture && swiftAudioCaptureSupported) {
-    startSystemAudioStream();
-    console.log('Started dual audio streams (microphone + system audio)');
-  } else {
-    console.log('Started single mixed audio stream (mic + system audio via SoX)');
+  // Track when streams are ready
+  streamsReadyTime = Date.now();
+  if (recordingStartClickTime) {
+    const streamsReadyDuration = streamsReadyTime - recordingStartClickTime;
+    console.log(`🎯 [TIMING] Streams created and ready: ${streamsReadyDuration}ms from user click`);
   }
+  console.log('🎯 Started dual audio streams (microphone + system audio)');
+    
+    // Monitor for concurrent processing activation
+  setTimeout(() => {
+    const status = dualStreamManager.getStreamStatus();
+    if (status.concurrent) {
+      console.log('✅ Dual stream concurrent processing is active');
+      
+      // Log comprehensive timing summary when fully operational
+      if (recordingStartClickTime && streamsReadyTime && firstAudioDataTime) {
+        const totalStartupTime = firstAudioDataTime - recordingStartClickTime;
+        const streamCreationTime = streamsReadyTime - recordingStartClickTime;
+        const dataFlowTime = firstAudioDataTime - streamsReadyTime;
+        
+        console.log('📊 [TIMING SUMMARY] Audio capture startup breakdown:');
+        console.log(`   • Stream creation: ${streamCreationTime}ms`);
+        console.log(`   • Data flow start: ${dataFlowTime}ms`);
+        console.log(`   • Total startup: ${totalStartupTime}ms`);
+      }
+    } else {
+      console.log('⚠️ Waiting for both streams to become active...');
+    }
+    }, 1000);  
 }
 
 function startMicrophoneStream() {
@@ -1416,9 +1401,9 @@ function startMicrophoneStream() {
     ? preInitializedSpeechClient 
     : initializeGoogleSpeechClient();
   
-  if (speechClientPreInitialized) {
-    console.log('✅ Using pre-initialized speech client for microphone stream');
-  }
+  // if (speechClientPreInitialized) {
+  //   console.log('✅ Using pre-initialized speech client for microphone stream');
+  // }
   
   // Clear current microphoneAudioInput
   microphoneAudioInput = [];
@@ -1482,7 +1467,7 @@ function startSystemAudioStream() {
     : initializeGoogleSpeechClient();
   
   if (speechClientPreInitialized) {
-    console.log('✅ Using pre-initialized speech client for system audio stream');
+    // console.log('✅ Using pre-initialized speech client for system audio stream');
   }
   
   // Clear current systemAudioInput
@@ -1514,7 +1499,7 @@ function startSystemAudioStream() {
       .streamingRecognize(currentRequest)
       .on('error', err => {
         if (err.code === 11) {
-          console.log('System audio stream exceeded time limit, restarting...');
+          // console.log('System audio stream exceeded time limit, restarting...');
         } else {
           console.error('System audio API request error:', err);
         }
@@ -1535,7 +1520,8 @@ function startSystemAudioStream() {
   }
 }
 
-const microphoneSpeechCallback = stream => {
+const microphoneSpeechCallback = (stream) => {
+  // console.log('[DEBUG] Microphone audio speech callback called with stream:', JSON.stringify(stream, null, 2));
   // Convert API result end time from seconds + nanoseconds to milliseconds
   microphoneResultEndTime =
     stream.results[0].resultEndTime.seconds * 1000 +
@@ -1564,12 +1550,12 @@ const microphoneSpeechCallback = stream => {
       const lastChunk = microphoneAudioInput[microphoneAudioInput.length - 1];
       if (lastChunk && lastChunk.bufferReceivedAt) {
         const bufferToTranscriptLatency = transcriptReceivedAt - lastChunk.bufferReceivedAt;
-        console.log(`⏱️ [LATENCY] Microphone buffer-to-transcript: ${bufferToTranscriptLatency}ms`);
+        // console.log(`⏱️ [LATENCY] Microphone buffer-to-transcript: ${bufferToTranscriptLatency}ms`);
       }
     }
     
     // DEBUG: Print transcript data
-    console.log(`🎤 [MICROPHONE TRANSCRIPT] Length: ${transcript.length}, Content: "${transcript}", isFinal: ${stream.results[0].isFinal}`);
+    // console.log(`🎤 [MICROPHONE TRANSCRIPT] Length: ${transcript.length}, Content: "${transcript}", isFinal: ${stream.results[0].isFinal}`);
     
     // Extract speaker diarization information if available (for SoX fallback version)
     if (stream.results[0].alternatives[0].words && 
@@ -1598,7 +1584,7 @@ const microphoneSpeechCallback = stream => {
       const isMacOS15Plus = macOSVersion && macOSVersion.isSupported;
       
       // For macOS 15+: Microphone is always 'me', no speaker tags
-      // For older macOS: Map speaker tags (Speaker 1 = INTERVIEWER, Speaker 2 = INTERVIEWEE)
+      // For older macOS: Fallback to no speaker tags
       if (isMacOS15Plus) {
         // On macOS 15+, microphone input is always from the user
         speakerInfo = {
@@ -1610,12 +1596,14 @@ const microphoneSpeechCallback = stream => {
           }]
         };
       } else {
+        // Fallback for older macOS versions - no speaker diarization
         speakerInfo = {
-          hasSpeakerInfo: true,
-          speakers: speakers.map(speaker => ({
-            ...speaker,
-            role: speaker.speakerTag === 1 ? 'INTERVIEWER' : 'INTERVIEWEE'
-          }))
+          hasSpeakerInfo: false,
+          speakers: [{
+            speakerTag: 0,
+            text: transcript,
+            role: 'me' // Treat all input as 'me'
+          }]
         };
       }
       
@@ -1731,11 +1719,11 @@ const microphoneSpeechCallback = stream => {
 };
 
 const systemAudioSpeechCallback = stream => {
-  console.log(`[DEBUG] System audio speech callback called with stream:`, JSON.stringify(stream, null, 2));
+  // console.log(`[DEBUG] System audio speech callback called with stream:`, JSON.stringify(stream, null, 2));
   
   // Check if stream has results before processing
   if (!stream.results || !stream.results[0]) {
-    console.log(`[DEBUG] System audio callback: No results in stream`);
+    // console.log(`[DEBUG] System audio callback: No results in stream`);
     return;
   }
 
@@ -1766,12 +1754,12 @@ const systemAudioSpeechCallback = stream => {
       const lastChunk = systemAudioInput[systemAudioInput.length - 1];
       if (lastChunk && lastChunk.bufferReceivedAt) {
         const bufferToTranscriptLatency = transcriptReceivedAt - lastChunk.bufferReceivedAt;
-        console.log(`⏱️ [LATENCY] System audio buffer-to-transcript: ${bufferToTranscriptLatency}ms`);
+        // console.log(`⏱️ [LATENCY] System audio buffer-to-transcript: ${bufferToTranscriptLatency}ms`);
       }
     }
     
     // DEBUG: Print transcript data
-    console.log(`🔊 [SYSTEM AUDIO TRANSCRIPT] Length: ${transcript.length}, Content: "${transcript}", isFinal: ${stream.results[0].isFinal}`);
+    // console.log(`🔊 [SYSTEM AUDIO TRANSCRIPT] Length: ${transcript.length}, Content: "${transcript}", isFinal: ${stream.results[0].isFinal}`);"${transcript}", isFinal: ${stream.results[0].isFinal}`);
     
     // Process interim results immediately (not just final ones)
     if (!stream.results[0].isFinal) {
@@ -1826,6 +1814,55 @@ const BUFFER_FLUSH_TIMEOUT = 500; // 500ms timeout for buffer flushing
 let microphoneBufferTimer = null;
 let systemAudioBufferTimer = null;
 
+// Dual Stream Management
+class DualStreamManager {
+  constructor() {
+    this.microphoneStreamActive = false;
+    this.systemAudioStreamActive = false;
+    this.concurrentProcessing = false;
+  }
+
+  startConcurrentProcessing() {
+    this.concurrentProcessing = true;
+    console.log('🔄 Dual stream concurrent processing enabled');
+  }
+
+  stopConcurrentProcessing() {
+    this.concurrentProcessing = false;
+    this.microphoneStreamActive = false;
+    this.systemAudioStreamActive = false;
+    console.log('⏹️ Dual stream concurrent processing disabled');
+  }
+
+  setMicrophoneStreamStatus(active) {
+    this.microphoneStreamActive = active;
+    if (active && this.systemAudioStreamActive) {
+      this.startConcurrentProcessing();
+    }
+  }
+
+  setSystemAudioStreamStatus(active) {
+    this.systemAudioStreamActive = active;
+    if (active && this.microphoneStreamActive) {
+      this.startConcurrentProcessing();
+    }
+  }
+
+  isConcurrentProcessingActive() {
+    return this.concurrentProcessing && this.microphoneStreamActive && this.systemAudioStreamActive;
+  }
+
+  getStreamStatus() {
+    return {
+      microphone: this.microphoneStreamActive,
+      systemAudio: this.systemAudioStreamActive,
+      concurrent: this.concurrentProcessing
+    };
+  }
+}
+
+const dualStreamManager = new DualStreamManager();
+
 // Separate audio input transforms for microphone and system audio
 const microphoneAudioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
@@ -1833,6 +1870,18 @@ const microphoneAudioInputStreamTransform = new Writable({
     if (!isRecording) {
       next();
       return;
+    }
+    
+    // Mark microphone stream as active for dual stream management
+    if (!dualStreamManager.microphoneStreamActive) {
+      dualStreamManager.setMicrophoneStreamStatus(true);
+      
+      // Track first audio data received
+      if (!firstAudioDataTime && recordingStartClickTime) {
+        firstAudioDataTime = Date.now();
+        const firstDataDuration = firstAudioDataTime - recordingStartClickTime;
+        console.log(`🎯 [TIMING] First microphone audio data received: ${firstDataDuration}ms from user click`);
+      }
     }
     
     if (newMicrophoneStream && lastMicrophoneAudioInput.length !== 0) {
@@ -1926,6 +1975,9 @@ const microphoneAudioInputStreamTransform = new Writable({
   },
 
   final() {
+    // Mark microphone stream as inactive
+    dualStreamManager.setMicrophoneStreamStatus(false);
+    
     // Flush any remaining data in the buffer before ending the stream
     if (microphoneAudioBuffer.length > 0) {
       const concatenatedBuffer = Buffer.concat(microphoneAudioBuffer);
@@ -1947,6 +1999,8 @@ const microphoneAudioInputStreamTransform = new Writable({
         console.error('Error ending microphoneRecognizeStream:', err.message);
       }
     }
+    
+    console.log('🎤 Microphone stream finalized');
   },
 });
 
@@ -1960,6 +2014,18 @@ const systemAudioInputStreamTransform = new Writable({
     if (!isRecording) {
       next();
       return;
+    }
+    
+    // Mark system audio stream as active for dual stream management
+    if (!dualStreamManager.systemAudioStreamActive) {
+      dualStreamManager.setSystemAudioStreamStatus(true);
+      
+      // Track first system audio data received (only if microphone hasn't already logged)
+      if (!firstAudioDataTime && recordingStartClickTime) {
+        firstAudioDataTime = Date.now();
+        const firstDataDuration = firstAudioDataTime - recordingStartClickTime;
+        console.log(`🎯 [TIMING] First system audio data received: ${firstDataDuration}ms from user click`);
+      }
     }
     
     if (newSystemAudioStream && lastSystemAudioInput.length !== 0) {
@@ -2052,6 +2118,9 @@ const systemAudioInputStreamTransform = new Writable({
   },
 
   final() {
+    // Mark system audio stream as inactive
+    dualStreamManager.setSystemAudioStreamStatus(false);
+    
     // Flush any remaining data in the buffer before ending the stream
     if (systemAudioBuffer.length > 0) {
       const concatenatedBuffer = Buffer.concat(systemAudioBuffer);
@@ -2073,6 +2142,8 @@ const systemAudioInputStreamTransform = new Writable({
         console.error('Error ending systemAudioRecognizeStream:', err.message);
       }
     }
+    
+    console.log('🔊 System audio stream finalized');
   },
 });
 
@@ -2389,6 +2460,9 @@ async function processContextFile(filePath, fileName) {
 
 // Start the recording and send the microphone input to the Speech API
 async function main() {
+  // Initialize Gemini for screenshot processing
+  initializeGemini();
+  
   // Generate document summary if file is provided
   await generateDocumentSummary();
   
@@ -2422,115 +2496,505 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Process a screenshot to extract text using Gemini
-async function processScreenshot(screenshotPath) {
-  try {
-    console.log(`Screenshot path: ${screenshotPath}`);
+// Process a screenshot using optimized single Gemini call
+// Function to enhance formatting for code and math content
+function enhanceFormatting(text) {
+  let enhanced = text;
+  
+  // Ensure proper code block formatting with language detection
+  enhanced = enhanced.replace(/```([\s\S]*?)```/g, (match, code) => {
+    const trimmedCode = code.trim();
     
-    // Read the screenshot file as base64
-    const fileBuffer = fs.readFileSync(screenshotPath);
-    const base64Data = fileBuffer.toString('base64');
+    // If no language specified, try to detect it
+    if (!trimmedCode.match(/^\w+\n/)) {
+      const detectedLang = detectCodeLanguage(trimmedCode);
+      if (detectedLang) {
+        return `\`\`\`${detectedLang}\n${trimmedCode}\n\`\`\``;
+      }
+    }
+    
+    // Ensure proper formatting
+    return `\`\`\`${trimmedCode}\n\`\`\``;
+  });
+  
+  // Enhance inline code formatting
+  enhanced = enhanced.replace(/`([^`]+)`/g, (match, code) => {
+    return `\`${code.trim()}\``;
+  });
+  
+  // Ensure LaTeX math formatting is preserved and enhanced
+  // Block math equations
+  enhanced = enhanced.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
+    return `$$${math.trim()}$$`;
+  });
+  
+  // Inline math expressions
+  enhanced = enhanced.replace(/\$([^$\n]+)\$/g, (match, math) => {
+    return `$${math.trim()}$`;
+  });
+  
+  // Improve markdown formatting
+  enhanced = enhanced.replace(/^(#{1,6})\s*(.+)$/gm, (match, hashes, title) => {
+    return `${hashes} ${title.trim()}`;
+  });
+  
+  // Ensure proper list formatting
+  enhanced = enhanced.replace(/^[\s]*[-*+]\s+(.+)$/gm, (match, item) => {
+    return `- ${item.trim()}`;
+  });
+  
+  // Ensure proper numbered list formatting
+  enhanced = enhanced.replace(/^[\s]*\d+\.\s+(.+)$/gm, (match, item) => {
+    const num = match.match(/^[\s]*(\d+)\./)[1];
+    return `${num}. ${item.trim()}`;
+  });
+  
+  return enhanced;
+}
+
+// Function to detect programming language from code content
+function detectCodeLanguage(code) {
+  const trimmedCode = code.trim().toLowerCase();
+  
+  // JavaScript/TypeScript patterns
+  if (trimmedCode.includes('function') || trimmedCode.includes('const ') || 
+      trimmedCode.includes('let ') || trimmedCode.includes('var ') ||
+      trimmedCode.includes('console.log') || trimmedCode.includes('=>') ||
+      trimmedCode.includes('import ') || trimmedCode.includes('export ')) {
+    return 'javascript';
+  }
+  
+  // Python patterns
+  if (trimmedCode.includes('def ') || trimmedCode.includes('import ') ||
+      trimmedCode.includes('print(') || trimmedCode.includes('if __name__') ||
+      trimmedCode.includes('class ') && trimmedCode.includes(':')) {
+    return 'python';
+  }
+  
+  // Java patterns
+  if (trimmedCode.includes('public class') || trimmedCode.includes('public static void main') ||
+      trimmedCode.includes('System.out.println') || trimmedCode.includes('import java.')) {
+    return 'java';
+  }
+  
+  // C/C++ patterns
+  if (trimmedCode.includes('#include') || trimmedCode.includes('int main(') ||
+      trimmedCode.includes('printf(') || trimmedCode.includes('cout <<')) {
+    return trimmedCode.includes('cout') ? 'cpp' : 'c';
+  }
+  
+  // HTML patterns
+  if (trimmedCode.includes('<html') || trimmedCode.includes('<!doctype') ||
+      trimmedCode.includes('<div') || trimmedCode.includes('<script')) {
+    return 'html';
+  }
+  
+  // CSS patterns
+  if (trimmedCode.includes('{') && trimmedCode.includes('}') &&
+      (trimmedCode.includes(':') && trimmedCode.includes(';'))) {
+    return 'css';
+  }
+  
+  // SQL patterns
+  if (trimmedCode.includes('select ') || trimmedCode.includes('insert ') ||
+      trimmedCode.includes('update ') || trimmedCode.includes('delete ') ||
+      trimmedCode.includes('create table')) {
+    return 'sql';
+  }
+  
+  // JSON patterns
+  if ((trimmedCode.startsWith('{') && trimmedCode.endsWith('}')) ||
+      (trimmedCode.startsWith('[') && trimmedCode.endsWith(']'))) {
+    try {
+      JSON.parse(code);
+      return 'json';
+    } catch (e) {
+      // Not valid JSON
+    }
+  }
+  
+  // Shell/Bash patterns
+  if (trimmedCode.includes('#!/bin/bash') || trimmedCode.includes('echo ') ||
+      trimmedCode.includes('cd ') || trimmedCode.includes('ls ') ||
+      trimmedCode.includes('grep ')) {
+    return 'bash';
+  }
+  
+  return null; // No language detected
+}
+
+// Smart cropping function to focus on relevant UI elements
+async function smartCropImage(sharpInstance, width, height) {
+  const cropStartTime = Date.now();
+  const CROP_TIMEOUT = 1000; // 1 second timeout
+  
+  try {
+    // Add timeout wrapper
+    const cropPromise = (async () => {
+      // Convert to grayscale for edge detection
+      const grayBuffer = await sharpInstance.clone().grayscale().raw().toBuffer();
+      
+      // Analyze image for UI elements using simple heuristics
+      const cropRegions = await detectUIElements(grayBuffer, width, height);
+      
+      if (cropRegions.length > 0) {
+        // Select the most relevant crop region
+        const bestRegion = selectBestCropRegion(cropRegions, width, height);
+        
+        if (bestRegion) {
+          // Apply the crop
+          const croppedBuffer = await sharpInstance
+            .extract({
+              left: bestRegion.left,
+              top: bestRegion.top,
+              width: bestRegion.width,
+              height: bestRegion.height
+            })
+            .toBuffer();
+          
+          return {
+            cropped: true,
+            buffer: croppedBuffer,
+            description: `${bestRegion.type} region (${bestRegion.width}x${bestRegion.height}) in ${Date.now() - cropStartTime}ms`
+          };
+        }
+      }
+      
+      // No suitable crop region found, return original
+      return { cropped: false, buffer: await sharpInstance.toBuffer() };
+    })();
+    
+    // Race between crop operation and timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Crop timeout')), CROP_TIMEOUT);
+    });
+    
+    return await Promise.race([cropPromise, timeoutPromise]);
+    
+  } catch (error) {
+    const elapsed = Date.now() - cropStartTime;
+    console.log(`[PERF] Smart crop ${error.message === 'Crop timeout' ? 'timed out' : 'failed'} after ${elapsed}ms, using original image`);
+    return { cropped: false, buffer: await sharpInstance.toBuffer() };
+  }
+}
+
+// Detect UI elements in the image using edge detection and pattern analysis
+async function detectUIElements(grayBuffer, width, height) {
+  const regions = [];
+  const minRegionSize = Math.min(width, height) * 0.1; // Minimum 10% of smallest dimension
+  
+  // Optimized scanning with larger step size and early termination
+  const stepSize = Math.max(8, Math.floor(Math.min(width, height) / 50)); // Increased step size
+  const maxRegions = 20; // Limit number of regions to analyze
+  
+  for (let y = 0; y < height - minRegionSize && regions.length < maxRegions; y += stepSize) {
+    for (let x = 0; x < width - minRegionSize && regions.length < maxRegions; x += stepSize) {
+      const region = analyzeRegion(grayBuffer, x, y, width, height, minRegionSize);
+      if (region && region.score > 0.3) { // Threshold for UI element detection
+        regions.push(region);
+      }
+    }
+  }
+  
+  return regions;
+}
+
+// Analyze a specific region for UI element characteristics (optimized)
+function analyzeRegion(grayBuffer, startX, startY, imageWidth, imageHeight, regionSize) {
+  const endX = Math.min(startX + regionSize, imageWidth);
+  const endY = Math.min(startY + regionSize, imageHeight);
+  
+  let edgeCount = 0;
+  let textLikePixels = 0;
+  let totalPixels = 0;
+  
+  // Optimized sampling: check every 4th pixel for speed
+  const sampleStep = 4;
+  
+  for (let y = startY; y < endY - 1; y += sampleStep) {
+    for (let x = startX; x < endX - 1; x += sampleStep) {
+      const idx = y * imageWidth + x;
+      const current = grayBuffer[idx];
+      const right = grayBuffer[idx + 1];
+      const below = grayBuffer[(y + 1) * imageWidth + x];
+      
+      // Edge detection (simple gradient)
+      const edgeStrength = Math.abs(current - right) + Math.abs(current - below);
+      if (edgeStrength > 30) edgeCount++;
+      
+      // Text-like pattern detection (high contrast variations)
+      if (current < 100 || current > 200) textLikePixels++;
+      
+      totalPixels++;
+    }
+  }
+  
+  const edgeRatio = edgeCount / totalPixels;
+  const textRatio = textLikePixels / totalPixels;
+  
+  // Score based on edge density and text-like patterns
+  const score = (edgeRatio * 0.7) + (textRatio * 0.3);
+  
+  if (score > 0.3) {
+    return {
+      left: startX,
+      top: startY,
+      width: endX - startX,
+      height: endY - startY,
+      score: score,
+      type: textRatio > 0.4 ? 'text' : 'ui-element'
+    };
+  }
+  
+  return null;
+}
+
+// Select the best crop region based on relevance and size
+function selectBestCropRegion(regions, imageWidth, imageHeight) {
+  if (regions.length === 0) return null;
+  
+  // Sort regions by score and prefer larger, more central regions
+  const scoredRegions = regions.map(region => {
+    const centerX = region.left + region.width / 2;
+    const centerY = region.top + region.height / 2;
+    const imageCenterX = imageWidth / 2;
+    const imageCenterY = imageHeight / 2;
+    
+    // Distance from image center (normalized)
+    const centerDistance = Math.sqrt(
+      Math.pow((centerX - imageCenterX) / imageWidth, 2) +
+      Math.pow((centerY - imageCenterY) / imageHeight, 2)
+    );
+    
+    // Size factor (prefer larger regions)
+    const sizeFactor = (region.width * region.height) / (imageWidth * imageHeight);
+    
+    // Combined score: base score + size bonus - center distance penalty
+    const finalScore = region.score + (sizeFactor * 0.5) - (centerDistance * 0.3);
+    
+    return { ...region, finalScore };
+  });
+  
+  // Sort by final score and return the best region
+  scoredRegions.sort((a, b) => b.finalScore - a.finalScore);
+  
+  const bestRegion = scoredRegions[0];
+  
+  // Ensure minimum crop size (at least 25% of original)
+  const minCropArea = (imageWidth * imageHeight) * 0.25;
+  const cropArea = bestRegion.width * bestRegion.height;
+  
+  if (cropArea >= minCropArea) {
+    return bestRegion;
+  }
+  
+  return null;
+}
+
+async function processScreenshot(screenshotPath) {
+  const processingStartTime = Date.now();
+  
+  try {
+    console.log(`[PERF] Starting screenshot processing: ${screenshotPath}`);
+    
+    // Read the screenshot file as base64 with async operation
+    const readStartTime = Date.now();
+    const fileBuffer = await fs.promises.readFile(screenshotPath);
+    const readTime = Date.now() - readStartTime;
+    console.log(`[PERF] File read took: ${readTime}ms (${fileBuffer.length} bytes)`);
+    
+    // Smart cropping and compression for faster Gemini processing
+    const processStartTime = Date.now();
+    const sharp = require('sharp');
+    
+    // Get image metadata for smart cropping
+    const imageInfo = await sharp(fileBuffer).metadata();
+    const { width, height } = imageInfo;
+    console.log(`[PERF] Original image dimensions: ${width}x${height}`);
+    
+    // Apply smart cropping to focus on relevant UI elements
+    let processedBuffer = fileBuffer;
+    const cropResult = await smartCropImage(sharp(fileBuffer), width, height);
+    if (cropResult.cropped) {
+      processedBuffer = cropResult.buffer;
+      console.log(`[PERF] Smart crop applied: ${cropResult.description}`);
+    }
+    
+    // Compress the processed image
+    const compressedBuffer = await sharp(processedBuffer)
+      .resize(1920, 1080, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const processTime = Date.now() - processStartTime;
+    console.log(`[PERF] Image processing took: ${processTime}ms (${fileBuffer.length} -> ${compressedBuffer.length} bytes, ${Math.round((1 - compressedBuffer.length/fileBuffer.length) * 100)}% reduction)`);
     
     // Create the image part for Gemini
     const imagePart = {
       inlineData: {
-        data: base64Data,
-        mimeType: 'image/png'
+        data: compressedBuffer.toString('base64'),
+        mimeType: 'image/jpeg'
       }
     };
     
-    // Extract text from the image using Gemini
-    const extractResult = await model.generateContent([
-      imagePart,
-      'Extract all the text visible in this image. Return only the extracted text without any additional commentary.'
-    ], {
-      timeout: 30000 // Add timeout to prevent hanging requests
-    });
-    
-    const extractedText = extractResult.response.text();
-    
-    // Prepare context for inclusion in the system prompt
+    // Check for rate limiting to prevent overwhelming the AI service
+    const currentTime = Date.now();
+    if (currentTime - lastProcessedTime < MIN_PROCESSING_INTERVAL) {
+      const waitTime = MIN_PROCESSING_INTERVAL - (currentTime - lastProcessedTime);
+      console.log(`[PERF] Rate limiting: waiting ${waitTime}ms before processing`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    lastProcessedTime = Date.now();
+
+    // Prepare context with caching for better performance
     let contextData = '';
+    let promptKey = 'screenshot';
+    
     if (fileContext) {
-      contextData = `\n\n### Context Information:\n${fileContext}`;
-      console.log('[SERVER] Including file context in screenshot analysis');
+      // Use cached context if available
+      const contextKey = `file_${fileContext.length}_${fileContext.substring(0, 100)}`;
+      if (contextCache.has(contextKey)) {
+        contextData = contextCache.get(contextKey);
+        console.log('[SERVER] Using cached file context');
+      } else {
+        contextData = fileContext;
+        contextCache.set(contextKey, contextData);
+        console.log('[SERVER] Cached file context for future use');
+      }
+      promptKey = 'withContext';
     } else if (extractedContent) {
-      contextData = `\n\n### Context Information:\n${extractedContent}`;
-      console.log('[SERVER] Including extracted content in screenshot analysis');
+      // Use cached context if available
+      const contextKey = `extracted_${extractedContent.length}_${extractedContent.substring(0, 100)}`;
+      if (contextCache.has(contextKey)) {
+        contextData = contextCache.get(contextKey);
+        console.log('[SERVER] Using cached extracted content');
+      } else {
+        contextData = extractedContent;
+        contextCache.set(contextKey, contextData);
+        console.log('[SERVER] Cached extracted content for future use');
+      }
+      promptKey = 'withContext';
     }
 
-    // Generate solution using Gemini with context
-    const baseSystemPrompt = `You are a technical problem solver. Analyze the following text and:
-1. If it contains code:
-   - Identify any bugs or issues
-   - Provide corrected code with EXTREMELY CONCISE explanations
-   - Format the code properly with syntax highlighting
-2. If it contains system architecture or design:
-   - Analyze the design patterns and architecture
-   - Suggest improvements or best practices
-   - Format the documentation in a clear structure
-3. If it contains error messages:
-   - Diagnose the root cause
-   - Provide step-by-step solutions
-   - Include code examples if applicable
-
-Format your response in markdown for better readability.`;
-
-    // Add context to system prompt if available
-    const enhancedSystemPrompt = baseSystemPrompt + contextData + 
-      (contextData ? "\n\nUse the provided context information when relevant to provide more accurate and specific solutions." : "");
-
-    const solutionResult = await model.generateContent([
-      enhancedSystemPrompt,
-      `Here's the text to analyze:\n${extractedText}`
-    ], {
-      timeout: 30000 // Add timeout to prevent hanging requests
-    });
-
-    const solution = solutionResult.response.text();
+    // Use optimized cached prompts
+    let optimizedPrompt;
+    if (promptCache.has(promptKey)) {
+      optimizedPrompt = promptCache.get(promptKey);
+      console.log(`[PERF] Using cached prompt template: ${promptKey}`);
+    } else {
+      if (promptKey === 'withContext') {
+        optimizedPrompt = OPTIMIZED_PROMPTS.withContext.replace('{context}', contextData);
+      } else {
+        optimizedPrompt = OPTIMIZED_PROMPTS.screenshot;
+      }
+      promptCache.set(promptKey, optimizedPrompt);
+      console.log(`[PERF] Cached prompt template: ${promptKey}`);
+    }
     
-    // Simplified formatting to reduce processing overhead
-    let formattedSolution = solution;
-    
-    // Only apply minimal formatting when needed
-    if (!solution.includes('```') && solution.match(/^[\s\S]*?[{};].*$/m)) {
-      // Looks like code, wrap it in a code block
-      formattedSolution = '```\n' + solution + '\n```';
+    // For context-based prompts, replace the placeholder
+    if (promptKey === 'withContext' && contextData) {
+      optimizedPrompt = OPTIMIZED_PROMPTS.withContext.replace('{context}', contextData);
     }
 
-    // Send smaller payload to reduce IPC overhead
+    // AI processing with streaming for better UX
+    const aiStartTime = Date.now();
+    console.log('[PERF] Starting AI processing (streaming)...');
+
+    // Show processing indicator in the UI
+    process.send({ type: 'suggestion-processing' });
+
+    const streamResult = await model.generateContentStream([
+      imagePart,
+      optimizedPrompt
+    ]);
+
+    let solutionText = '';
+    for await (const chunk of streamResult.stream) {
+      const chunkText = chunk.text();
+      solutionText += chunkText;
+      // Stream partial results to the UI with accumulated text
+      process.send({
+        type: 'suggestion-partial',
+        data: { 
+          fullText: solutionText,
+          isFinal: false,
+          source: 'screenshot'
+        }
+      });
+    }
+
+    const aiTime = Date.now() - aiStartTime;
+    console.log(`[PERF] AI processing took: ${aiTime}ms`);
+
+    // Enhanced formatting for better code and math presentation
+    const formatStartTime = Date.now();
+    const formattedSolution = enhanceFormatting(solutionText);
+    const formatTime = Date.now() - formatStartTime;
+
+    const totalTime = Date.now() - processingStartTime;
+    console.log(`[PERF] Screenshot analysis completed in ${totalTime}ms (read: ${readTime}ms, AI: ${aiTime}ms, format: ${formatTime}ms)`);
+
+    // Send the final, formatted solution
     process.send({
       type: 'suggestion',
       data: {
-        text: formattedSolution
+        text: formattedSolution,
+        fullText: formattedSolution,
+        isFinal: true,
+        source: 'screenshot',
+        processingTime: totalTime
       }
     });
     
-    // Send minimal data in screenshot processed event
+    // Also send as suggestion-partial for consistency with streaming
+    process.send({
+      type: 'suggestion-partial',
+      data: {
+        fullText: formattedSolution,
+        isFinal: true,
+        source: 'screenshot'
+      }
+    });
+    
+    // Send minimal success notification
     process.send({
       type: 'screenshot-processed',
       data: {
-        success: true
+        success: true,
+        processingTime: totalTime
       }
     });
     
-    return extractedText;
+    // Asynchronously clean up screenshot file to free disk space
+    setImmediate(() => {
+      try {
+        fs.unlinkSync(screenshotPath);
+        console.log(`[CLEANUP] Removed processed screenshot: ${screenshotPath}`);
+      } catch (error) {
+        console.log(`[CLEANUP] Could not remove screenshot file: ${error.message}`);
+      }
+    });
+    
+    return { text: formattedSolution, source: 'screenshot', processingTime: totalTime };
   } catch (error) {
+    const totalTime = Date.now() - processingStartTime;
+    console.error(`[ERROR] Screenshot processing failed after ${totalTime}ms:`, error.message);
     
     // Combine error messages to reduce number of IPC calls
     process.send({
       type: 'error',
       data: {
-        message: `Error processing screenshot: ${error.message}`
+        message: `Error processing screenshot: ${error.message}`,
+        processingTime: totalTime
       }
     });
     
-    // Send screenshot processed event with error (combined with suggestion clear)
+    // Send screenshot processed event with error
     process.send({
       type: 'screenshot-processed',
       data: {
         success: false,
         error: error.message,
+        processingTime: totalTime,
         clearSuggestion: true
       }
     });
@@ -2606,28 +3070,48 @@ async function generateAISuggestion(transcript) {
       
       // Send the message with the updated chat object
       contextualChat.sendMessageStream(transcript)
-      .then(async (result) => {
-        let fullResponse = '';
-        for await (const chunk of result.stream) {
-          fullResponse += chunk.text();
-        }
-        
-        // Send AI suggestion to the Electron frontend via IPC
-        console.log('[SERVER] Sending suggestion via IPC:', fullResponse);
-        process.send({ type: 'suggestion', data: { text: fullResponse } });
-        
-        // Update chat history
-        chatHistory.push(
-          { role: 'user', parts: [{ text: transcript }] },
-          { role: 'model', parts: [{ text: fullResponse }] }
-        );
-        
-        // Update the global chat object with the new history
-        chat = geminiModel.startChat({
-          history: chatHistory,
-          systemInstruction: systemInstruction
-        });
-      })
+        .then(async (result) => {
+          let fullResponse = '';
+          for await (const chunk of result.stream) {
+            const content = chunk.text();
+            if (content) {
+              fullResponse += content;
+              // Send each chunk to the frontend as it arrives
+              process.send({ 
+                type: 'suggestion-chunk', 
+                data: { 
+                  text: content,
+                  fullText: fullResponse,
+                  isFinal: false,
+                  source: 'voice'
+                } 
+              });
+            }
+          }
+
+          // Send the final complete response
+          console.log('[SERVER] Sending final suggestion via IPC:', fullResponse);
+          process.send({ 
+            type: 'suggestion', 
+            data: { 
+              text: fullResponse,
+              isFinal: true,
+              source: 'voice'
+            } 
+          });
+
+          // Update chat history
+          chatHistory.push(
+            { role: 'user', parts: [{ text: transcript }] },
+            { role: 'model', parts: [{ text: fullResponse }] }
+          );
+
+          // Update the global chat object with the new history
+          chat = geminiModel.startChat({
+            history: chatHistory,
+            systemInstruction: systemInstruction
+          });
+        })
       .catch(error => {
         console.error('[SERVER] Error generating Gemini suggestion:', error.message);
         process.send({ type: 'error', data: { message: `Error generating AI suggestion: ${error.message}` } });
@@ -2675,7 +3159,8 @@ async function generateAISuggestion(transcript) {
                 data: { 
                   text: content,
                   fullText: fullResponse,
-                  isFinal: false
+                  isFinal: false,
+                  source: 'voice'
                 } 
               });
             }
@@ -2687,7 +3172,8 @@ async function generateAISuggestion(transcript) {
             type: 'suggestion', 
             data: { 
               text: fullResponse,
-              isFinal: true 
+              isFinal: true,
+              source: 'voice'
             } 
           });
           
@@ -2711,12 +3197,92 @@ async function generateAISuggestion(transcript) {
 // Pre-initialize audio capture to eliminate startup delay
 let audioPreInitialized = false;
 
+// Function to request permissions interactively
+function requestPermissionsInteractively(permissionType) {
+  const swiftToolPath = process.env.NODE_ENV === 'production'
+    ? path.join(process.resourcesPath, 'bin', 'AudioCapture')
+    : path.join(__dirname, 'bin', 'AudioCapture');
+
+  if (!fs.existsSync(swiftToolPath)) {
+    console.error('Swift audio capture tool not found for permission request');
+    sendPermissionError(permissionType, 'tool-not-found');
+    return;
+  }
+
+  console.log(`🔄 Requesting ${permissionType} permissions interactively...`);
+  
+  try {
+    const { spawn } = require('child_process');
+    const permissionRequestProcess = spawn(swiftToolPath, ['--request-permissions']);
+
+    permissionRequestProcess.stdout.on('data', (data) => {
+      console.log(`[Swift Permission Request]: ${data}`);
+    });
+
+    permissionRequestProcess.stderr.on('data', (data) => {
+      console.error(`[Swift Permission Request Error]: ${data}`);
+    });
+
+    permissionRequestProcess.on('close', (code) => {
+      console.log(`Swift permission request process exited with code ${code}`);
+      if (code === 0) {
+        console.log('✅ Permissions granted successfully!');
+        // Send success message to renderer
+        if (process.send) {
+          process.send({ 
+            type: 'info', 
+            data: { 
+              message: 'Permissions granted successfully! You can now start recording.',
+              code: 'permissions-granted'
+            } 
+          });
+        }
+      } else {
+        console.error('❌ Permission request failed or was denied.');
+        sendPermissionError(permissionType, 'request-failed');
+      }
+    });
+  } catch (error) {
+    console.error('Error spawning Swift for permission request:', error);
+    sendPermissionError(permissionType, 'spawn-failed');
+  }
+}
+
+// Helper function to send permission error messages
+function sendPermissionError(permissionType, errorCode) {
+  if (!process.send) return;
+
+  let message, url;
+  switch (permissionType) {
+    case 'microphone':
+      message = 'This app needs microphone access to work. Click here to re-enable it in System Settings.';
+      url = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone';
+      break;
+    case 'screen-recording':
+      message = 'This app needs screen recording access to work. Click here to re-enable it in System Settings.';
+      url = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+      break;
+    default:
+      message = 'This app needs microphone and screen recording access to work. Click here to re-enable it in System Settings.';
+      url = 'x-apple.systempreferences:com.apple.preference.security';
+  }
+
+  process.send({
+    type: 'error',
+    data: {
+      message,
+      code: `${permissionType}-permission-denied`,
+      isPersistent: true,
+      url
+    }
+  });
+}
+
 async function preInitializeAudioCapture() {
   if (audioPreInitialized || process.platform !== 'darwin') {
     return;
   }
   
-  console.log('🚀 Pre-initializing Swift audio capture tool...');
   const preInitStartTime = Date.now();
   
   try {
@@ -2729,13 +3295,16 @@ async function preInitializeAudioCapture() {
     
     // Just verify the tool exists and is executable, then run permission check
     if (fs.existsSync(swiftToolPath)) {
-      console.log('✅ Swift audio capture tool found. Checking permissions...');
+      // console.log('✅ Swift audio capture tool found. Checking permissions...');
       try {
         const { spawn } = require('child_process');
         const permissionCheckProcess = spawn(swiftToolPath, ['--permission-check']);
 
+        let swiftOutput = '';
         permissionCheckProcess.stdout.on('data', (data) => {
-          console.log(`[Swift Permission Check]: ${data}`);
+          const output = data.toString();
+          swiftOutput += output;
+          console.log(`[Swift Permission Check]: ${output}`);
         });
 
         permissionCheckProcess.stderr.on('data', (data) => {
@@ -2744,26 +3313,38 @@ async function preInitializeAudioCapture() {
 
         permissionCheckProcess.on('close', (code) => {
           console.log(`Swift permission check process exited with code ${code}`);
-          if (code === 0) {
-            console.log('✅ Swift audio permissions checked successfully.');
+
+          const micDenied = swiftOutput.includes('🎤 Microphone: ❌ Not Available');
+          const screenDenied = swiftOutput.includes('🖥️  Screen Recording: ❌ Not Available');
+
+          if (micDenied) {
+            console.error('❌ Microphone permission is required but not granted.');
+            requestPermissionsInteractively('microphone');
+          } else if (screenDenied) {
+            console.error('❌ Screen recording permission is required but not granted.');
+            requestPermissionsInteractively('screen-recording');
+          } else if (code !== 0) {
+            console.warn('⚠️ Swift audio permission check failed with unexpected error.');
+            requestPermissionsInteractively('all');
           } else {
-            console.warn('⚠️ Swift audio permission check failed or permissions not granted.');
+            console.log('✅ All required permissions are available.');
           }
+
           audioPreInitialized = true;
           const preInitDuration = Date.now() - preInitStartTime;
-          console.log(`⏱️ [LATENCY] Audio pre-initialization and permission check took: ${preInitDuration}ms`);
+          // console.log(`⏱️ [LATENCY] Audio pre-initialization and permission check took: ${preInitDuration}ms`);
         });
       } catch (permError) {
         console.error('Error spawning Swift for permission check:', permError);
         useSwiftAudioCapture = true; // Fallback if permission check itself fails
       }
     } else {
-      console.log('⚠️ Swift audio capture tool not found, will use SoX fallback');
+      // console.log('⚠️ Swift audio capture tool not found, will use SoX fallback');
       useSwiftAudioCapture = true;
     }
   } catch (error) {
     console.error('Failed to pre-initialize audio capture:', error);
-    console.log('Will initialize audio capture on demand');
+    // console.log('Will initialize audio capture on demand');
   }
 }
 

@@ -1,5 +1,6 @@
-const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer, systemPreferences } = require('electron');
 const path = require('path');
+const { BAR_HEIGHT, EXPANDED_HEIGHT, WINDOW_WIDTH } = require('./constants.js');
 const { fork } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -36,19 +37,58 @@ if (process.platform === 'darwin') {
 
 const { createLogger } = require('./utils/logger');
 const WindowStateManager = require('./utils/window-state-manager');
-const { updateElectronApp, UpdateSourceType } = require('update-electron-app');
+const { autoUpdater } = require('electron-updater');
 const electronLog = require('electron-log');
 const { createSupabaseClient } = require('./utils/supabase'); // Import Supabase client
 
-// Initialize automatic updates only in production environment
-if (process.env.NODE_ENV === 'production' || app.isPackaged) {
-  updateElectronApp({
-    updateSource: {
-      type: UpdateSourceType.ElectronPublicUpdateService,
-      repo: 'xs00001111/realtime_convo_helper'
-    },
-    updateInterval: '1 hour',
-    logger: electronLog,
+// Initialize automatic updates
+const setupUpdater = () => {
+  electronLog.info('Setting up electron-updater...');
+  
+  // Configure electron-updater for GitHub releases
+  autoUpdater.logger = electronLog;
+  autoUpdater.logger.transports.file.level = 'info';
+  
+  // Only check for updates in packaged app
+  if (!app.isPackaged) {
+    electronLog.info('Skipping update check in development mode');
+    return;
+  }
+
+  autoUpdater.on('checking-for-update', () => {
+    electronLog.info('Checking for update...');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    electronLog.info('Update available.', info);
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    electronLog.info('Update not available.', info);
+  });
+
+  autoUpdater.on('error', (err) => {
+    electronLog.error('Error in auto-updater. ' + err);
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    let log_message = "Download speed: " + progressObj.bytesPerSecond;
+    log_message = log_message + ' - Downloaded ' + progressObj.percent + '%';
+    log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')';
+    electronLog.info(log_message);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    electronLog.info('Update downloaded', info);
+  });
+};
+
+// Setup updater only in production
+if (app.isPackaged) {
+  setupUpdater();
+  // Trigger update check on startup
+  app.whenReady().then(() => {
+    autoUpdater.checkForUpdatesAndNotify();
   });
 }
 
@@ -81,9 +121,15 @@ if (!fs.existsSync(screenshotDir)) {
 async function takeScreenshot(processAfterCapture = false) {
   if (!mainWindow) return;
   
+  const startTime = Date.now();
   let screenshotPath = "";
   
   try {
+    // Immediate UI feedback for better perceived performance
+    if (processAfterCapture && mainWindow) {
+      mainWindow.webContents.send('processing-screenshot', { message: 'Taking screenshot...' });
+    }
+    
     // Hide the app window temporarily to avoid it appearing in the screenshot
     const wasVisible = mainWindow.isVisible();
     if (wasVisible) {
@@ -92,25 +138,56 @@ async function takeScreenshot(processAfterCapture = false) {
       mainWindow.hide();
     }
     
-    // Reduced delay to minimize latency while still ensuring window is hidden
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // Optimized delay - reduced from 50ms to 25ms for faster capture
+    await new Promise(resolve => setTimeout(resolve, 25));
     
-    // Get screenshot buffer using native methods based on platform
-    const screenshotBuffer = 
-      process.platform === "darwin" 
-        ? await captureScreenshotMac() 
-        : await captureScreenshotWindows();
+    // Start screenshot capture and file operations in parallel
+    const capturePromise = process.platform === "darwin" 
+      ? captureScreenshotMac() 
+      : captureScreenshotWindows();
     
-    // Pin functionality removed
-    
-    // Generate a unique filename using timestamp
-    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+    // Generate filename while capture is happening
+    const timestamp = Date.now(); // Use numeric timestamp for better performance
     screenshotPath = path.join(screenshotDir, `screenshot-${timestamp}.png`);
+    
+    // Wait for screenshot capture to complete
+    const screenshotBuffer = await capturePromise;
+    const captureTime = Date.now();
+    logger.debug(`Screenshot capture took: ${captureTime - startTime}ms`);
+    
+    // Asynchronously clean up old screenshots to avoid blocking
+    setImmediate(() => {
+      try {
+        const MAX_SCREENSHOTS = 3; // Further reduced for better performance
+        const screenshotFiles = fs.readdirSync(screenshotDir)
+          .filter(file => file.startsWith('screenshot-'))
+          .map(file => path.join(screenshotDir, file));
+        
+        if (screenshotFiles.length > MAX_SCREENSHOTS) {
+          // Sort by creation time (oldest first)
+          screenshotFiles.sort((a, b) => {
+            return fs.statSync(a).mtime.getTime() - fs.statSync(b).mtime.getTime();
+          });
+          
+          const filesToRemove = screenshotFiles.slice(0, screenshotFiles.length - MAX_SCREENSHOTS);
+          for (const fileToRemove of filesToRemove) {
+            try {
+              fs.unlinkSync(fileToRemove);
+              logger.debug(`Removed old screenshot: ${fileToRemove}`);
+            } catch (error) {
+              logger.error(`Error removing old screenshot: ${error}`, error);
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('Error during screenshot cleanup:', error);
+      }
+    });
     
     // Save the screenshot to the temp directory
     fs.writeFileSync(screenshotPath, screenshotBuffer);
     
-    // Verify the file was written correctly
+    // Quick file size check
     const stats = fs.statSync(screenshotPath);
     if (stats.size === 0) {
       logger.error('Screenshot file was created but is empty');
@@ -120,36 +197,11 @@ async function takeScreenshot(processAfterCapture = false) {
       return;
     }
     
-    logger.info(`Screenshot saved to: ${screenshotPath} (${stats.size} bytes)`);
+    const saveTime = Date.now();
+    logger.info(`Screenshot saved: ${screenshotPath} (${stats.size} bytes) - Save took: ${saveTime - captureTime}ms`);
     
-    // Manage screenshot queue (keeping only the most recent screenshots)
-    const MAX_SCREENSHOTS = 5; // Reduced from 10 to minimize disk usage and improve performance
-    const screenshotFiles = fs.readdirSync(screenshotDir)
-      .filter(file => file.startsWith('screenshot-'))
-      .map(file => path.join(screenshotDir, file));
-    
-    // Sort by creation time (oldest first)
-    screenshotFiles.sort((a, b) => {
-      return fs.statSync(a).mtime.getTime() - fs.statSync(b).mtime.getTime();
-    });
-    
-    // Remove oldest screenshots if we have too many
-    if (screenshotFiles.length > MAX_SCREENSHOTS) {
-      const filesToRemove = screenshotFiles.slice(0, screenshotFiles.length - MAX_SCREENSHOTS);
-      for (const fileToRemove of filesToRemove) {
-        try {
-          fs.unlinkSync(fileToRemove);
-          logger.debug(`Removed old screenshot: ${fileToRemove}`);
-        } catch (error) {
-          logger.error(`Error removing old screenshot: ${error}`, error);
-        }
-      }
-    }
-    
-    // Show the main window again if it was visible before
+    // Show the main window again if it was visible before (no delay for better responsiveness)
     if (wasVisible && mainWindow) {
-      // Minimal delay before showing window again to reduce latency
-      await new Promise(resolve => setTimeout(resolve, 25));
       mainWindow.show();
       
       // Restore window position and size from saved state
@@ -165,18 +217,37 @@ async function takeScreenshot(processAfterCapture = false) {
     // Notify the renderer process that the screenshot was taken
     if (mainWindow) {
       mainWindow.webContents.send('screenshot-taken', { 
-  path: screenshotPath, 
-  isShortcut: processAfterCapture 
-});
+        path: screenshotPath, 
+        isShortcut: processAfterCapture 
+      });
     }
     
-    // If processAfterCapture is true, send the screenshot to the server for processing
+    // If processAfterCapture is true, send the screenshot to the server for processing immediately
     if (processAfterCapture && serverProcess) {
-      logger.info('Sending screenshot to server for processing...');
-      serverProcess.send({ type: 'process-screenshot', data: { path: screenshotPath } });
+      const processingStartTime = Date.now();
+      logger.info(`Sending screenshot to server for processing... Total capture time: ${processingStartTime - startTime}ms`);
+      
+      // Send immediate UI feedback for better perceived performance
       if (mainWindow) {
-        mainWindow.webContents.send('processing-screenshot', { message: 'Processing screenshot...' });
+        mainWindow.webContents.send('processing-screenshot', { 
+          message: 'Screenshot captured! Analyzing with AI...',
+          captureTime: processingStartTime - startTime,
+          status: 'processing',
+          timestamp: processingStartTime
+        });
       }
+      
+      // Send with high priority flag and optimized payload for faster processing
+      serverProcess.send({ 
+        type: 'process-screenshot', 
+        data: { 
+          path: screenshotPath,
+          priority: 'high',
+          captureTime: processingStartTime - startTime,
+          timestamp: processingStartTime,
+          optimize: true // Flag for server to use optimized processing
+        } 
+      });
     }
     
     return screenshotPath;
@@ -195,12 +266,18 @@ async function captureScreenshotMac() {
     // Create a temporary file path for the screenshot
     const tempPath = path.join(screenshotDir, `temp-${Date.now()}.png`);
     
-    // Use the screencapture utility on macOS with optimized options
+    // Use the screencapture utility on macOS with highly optimized options
     const { execFile } = require('child_process');
     await new Promise((resolve, reject) => {
-      // Using execFile instead of exec for better performance and security
-      // -x: no sound, -t: png format (faster than default), -C: no cursor
-      execFile('screencapture', ['-x', '-t', 'png', '-C', tempPath], (error) => {
+      // Optimized flags for maximum speed:
+      // -x: no sound (faster)
+      // -t png: PNG format (fastest for our use case)
+      // -C: no cursor (faster)
+      // -T 0: no delay (immediate capture)
+      // -m: only capture main display (faster than all displays)
+      execFile('screencapture', ['-x', '-t', 'png', '-C', '-T', '0', '-m', tempPath], {
+        timeout: 5000 // 5 second timeout to prevent hanging
+      }, (error) => {
         if (error) {
           reject(error);
           return;
@@ -209,8 +286,19 @@ async function captureScreenshotMac() {
       });
     });
     
-    // Read the file and return as buffer
-    return fs.readFileSync(tempPath);
+    // Read the file and return as buffer, then clean up temp file asynchronously
+    const buffer = fs.readFileSync(tempPath);
+    
+    // Clean up temp file asynchronously to avoid blocking
+    setImmediate(() => {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (error) {
+        logger.debug('Error cleaning up temp screenshot file:', error);
+      }
+    });
+    
+    return buffer;
   } catch (error) {
     logger.error('Error capturing screenshot on macOS:', error);
     throw error;
@@ -219,44 +307,116 @@ async function captureScreenshotMac() {
 
 // Platform-specific screenshot capture for Windows
 async function captureScreenshotWindows() {
+  const captureStartTime = Date.now();
+  
   try {
-    // Use Electron's desktopCapturer for Windows
+    console.log('[PERF] Starting Windows screenshot capture...');
+    
+    // Get screen sources with optimized settings for faster enumeration
+    const sourcesStartTime = Date.now();
     const sources = await desktopCapturer.getSources({ 
-      types: ['screen'], 
-      thumbnailSize: screen.getPrimaryDisplay().workAreaSize 
+      types: ['screen'],
+      thumbnailSize: { width: 320, height: 240 }, // Much smaller thumbnail for faster enumeration
+      fetchWindowIcons: false // Skip window icons for faster processing
     });
+    const sourcesTime = Date.now() - sourcesStartTime;
+    console.log(`[PERF] Windows screen sources enumeration took: ${sourcesTime}ms`);
     
-    // Get the primary display source
+    if (sources.length === 0) {
+      throw new Error('No screen sources found');
+    }
+    
+    // Get the primary display source (first one is usually primary)
     const primarySource = sources[0];
+    const primaryDisplay = screen.getPrimaryDisplay();
     
-    // Create a new BrowserWindow to capture the entire screen
+    // Use a much more efficient approach with minimal window overhead
+    const captureStartTime2 = Date.now();
     const captureWindow = new BrowserWindow({
-      width: screen.getPrimaryDisplay().workAreaSize.width,
-      height: screen.getPrimaryDisplay().workAreaSize.height,
+      width: 100, // Minimal size for faster creation
+      height: 100,
       show: false,
       frame: false,
       transparent: true,
+      skipTaskbar: true,
       webPreferences: {
-        offscreen: true
+        offscreen: true,
+        backgroundThrottling: false, // Prevent throttling
+        nodeIntegration: false,
+        contextIsolation: true
       }
     });
     
-    // Capture the entire screen
-    const screenshot = await captureWindow.webContents.capturePage({
-      x: 0,
-      y: 0,
-      width: screen.getPrimaryDisplay().bounds.width,
-      height: screen.getPrimaryDisplay().bounds.height
-    });
-    
-    // Close the capture window
-    captureWindow.close();
-    
-    return screenshot.toPNG();
+    try {
+      // Capture the primary display directly with optimized settings
+      const screenshot = await captureWindow.webContents.capturePage({
+        x: 0,
+        y: 0,
+        width: primaryDisplay.bounds.width,
+        height: primaryDisplay.bounds.height
+      });
+      
+      const captureTime = Date.now() - captureStartTime2;
+      console.log(`[PERF] Windows screen capture took: ${captureTime}ms`);
+      
+      // Convert to PNG buffer with optimized compression
+      const pngBuffer = screenshot.toPNG();
+      
+      const totalTime = Date.now() - captureStartTime;
+      console.log(`[PERF] Windows screenshot capture completed in ${totalTime}ms`);
+      
+      return pngBuffer;
+    } finally {
+      // Ensure window is always closed
+      captureWindow.close();
+    }
   } catch (error) {
+    const totalTime = Date.now() - captureStartTime;
+    console.error(`[ERROR] Windows screenshot capture failed after ${totalTime}ms:`, error);
     logger.error('Error capturing screenshot on Windows:', error);
     throw error;
   }
+}
+
+// Permission checking functions
+function hasMicrophoneAccess() {
+  if (process.platform !== 'darwin') return true; // Only check on macOS
+  return systemPreferences.getMediaAccessStatus('microphone') === 'granted';
+}
+
+function hasScreenRecordingAccess() {
+  if (process.platform !== 'darwin') return true; // Only check on macOS
+  return systemPreferences.getMediaAccessStatus('screen') === 'granted';
+}
+
+async function ensureMicrophoneAccess() {
+  if (process.platform !== 'darwin') return true;
+  
+  if (hasMicrophoneAccess()) return true;
+  
+  const asked = await systemPreferences.askForMediaAccess('microphone');
+  if (asked) return true;
+  
+  // Still denied -> tell renderer to show toast
+  if (mainWindow) {
+    mainWindow.webContents.send('permission-error', 'microphone');
+  }
+  return false;
+}
+
+async function ensureScreenRecordingAccess() {
+  if (process.platform !== 'darwin') return true;
+  
+  if (hasScreenRecordingAccess()) return true;
+  
+  const asked = await systemPreferences.askForMediaAccess('screen');
+  if (asked) return true;
+  
+  // Still denied -> tell renderer to show toast
+  if (mainWindow) {
+    mainWindow.webContents.send('permission-error', 'screen');
+  }
+  return false;
 }
 
 function createWindow() {
@@ -269,10 +429,11 @@ function createWindow() {
   
   // Create the browser window with enhanced undetectability features
   mainWindow = new BrowserWindow({
-    width: savedState.width || 800,
-    height: savedState.height || 400,
-    x: savedState.x || Math.floor((width - 800) / 2),
+    width: WINDOW_WIDTH,
+    height: BAR_HEIGHT,          // ⬅️  start collapsed
+    x: savedState.x || Math.floor((width - WINDOW_WIDTH) / 2),
     y: savedState.y || height - 450,
+    useContentSize: true,        // height excludes title-bar / shadow
     frame: false,
     transparent: true,
     backgroundColor: '#00000000', // Fully transparent background
@@ -307,9 +468,9 @@ function createWindow() {
   mainWindow.loadURL('file://' + path.join(__dirname, 'index.html'));
 
   // Open DevTools only in development mode
-  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-    mainWindow.webContents.openDevTools();
-  }
+  // if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+  //   mainWindow.webContents.openDevTools();
+  // }
 
   // Set up window state tracking
   windowStateManager.trackWindow(mainWindow);
@@ -398,11 +559,32 @@ function createWindow() {
   ipcMain.on('close', () => {
     app.quit();
   });
+
+  /* ——— IPC handlers for window resizing ——— */
+  ipcMain.on('ui-expand', () => {
+    if (mainWindow) {
+      mainWindow.setSize(WINDOW_WIDTH, EXPANDED_HEIGHT, true);   // instant resize
+    }
+  });
+  ipcMain.on('ui-collapse', () => {
+    if (mainWindow) {
+      mainWindow.setSize(WINDOW_WIDTH, BAR_HEIGHT, true);
+    }
+  });
   
   // Handle start recording button click
   ipcMain.on('start-recording', async (event, data) => { // Make handler async
-    if (serverProcess) {
-      logger.info('Received start-recording request from renderer');
+  if (serverProcess) {
+    logger.info('Received start-recording request from renderer');
+    
+    // Check permissions first
+    const hasMic = await ensureMicrophoneAccess();
+    const hasScreen = await ensureScreenRecordingAccess();
+    
+    if (!hasMic || !hasScreen) {
+      logger.warn('Recording cancelled due to missing permissions');
+      return;
+    }
       // Get the user ID from the auth service (ensure authService is initialized)
       const userId = authService?.getSession()?.user?.id;
       
@@ -414,21 +596,32 @@ function createWindow() {
         return;
       }
       
-      // Verify user's plan status
-      const planStatus = await getPlanStatus(userId);
-      
-      if (!planStatus.canStart) {
-        // User cannot start an interview due to plan limitations
-        logger.info(`User ${userId} cannot start recording: ${planStatus.reason}`);
+      // Verify user's plan status with immediate error feedback
+      let planStatus;
+      try {
+        planStatus = await getPlanStatus(userId);
+        
+        if (!planStatus.canStart) {
+          // User cannot start an interview due to plan limitations
+          logger.info(`User ${userId} cannot start recording: ${planStatus.reason}`);
+          if (mainWindow) {
+             // Send error event for status bar display
+             mainWindow.webContents.send('error', { 
+               message: `Plan limit reached: ${planStatus.reason || 'Unable to start interview due to plan limitations'}`,
+               type: 'plan-limit'
+             });
+             
+             logger.info('Sent plan limit error to renderer process');
+           }
+          return;
+        }
+      } catch (planError) {
+        logger.error('Error checking plan status:', planError);
         if (mainWindow) {
-          // Send the plan-limit-reached event to the renderer process
-          // This will trigger the modal to be displayed
-          mainWindow.webContents.send('plan-limit-reached', { 
-            reason: planStatus.reason || 'Unable to start interview due to plan limitations',
-            plan: planStatus.plan
+          mainWindow.webContents.send('error', { 
+            message: 'Unable to verify plan status. Please try again.',
+            type: 'plan-limit'
           });
-          
-          logger.info('Sent plan-limit-reached event to renderer process');
         }
         return;
       }
@@ -594,6 +787,27 @@ function createWindow() {
     }
   });
 
+  // Microphone capture handlers for older macOS versions
+  ipcMain.on('start-microphone-capture', (event) => {
+    if (serverProcess) {
+      logger.info('Received start-microphone-capture request from renderer');
+      serverProcess.send({ type: 'start-microphone-capture' });
+    }
+  });
+
+  ipcMain.on('stop-microphone-capture', (event) => {
+    if (serverProcess) {
+      logger.info('Received stop-microphone-capture request from renderer');
+      serverProcess.send({ type: 'stop-microphone-capture' });
+    }
+  });
+
+  ipcMain.on('microphone-data', (event, audioData) => {
+    if (serverProcess) {
+      serverProcess.send({ type: 'microphone-data', data: audioData });
+    }
+  });
+
   
   // Handle send to server
   ipcMain.on('send-to-server', async (event, message) => {
@@ -738,6 +952,25 @@ function createWindow() {
     } catch (error) {
       logger.error('Error creating temporary file:', error);
       throw error;
+    }
+  });
+  
+  // Handle hotkey actions from global shortcuts
+  ipcMain.on('trigger-ai-button', (event) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-ai-button');
+    }
+  });
+  
+  ipcMain.on('trigger-transcript-toggle', (event) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-transcript-toggle');
+    }
+  });
+  
+  ipcMain.on('trigger-copy-ai-text', (event) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-copy-ai-text');
     }
   });
   
@@ -1142,6 +1375,12 @@ ipcMain.on('delete-context', async (event) => {
       });
   });
 
+  // Handle take-screenshot IPC message
+  ipcMain.on('take-screenshot', () => {
+    logger.info('Screenshot requested via IPC');
+    takeScreenshot(false); // processAfterCapture = false for manual screenshots
+  });
+
 
 // Import the AuthService class
 const AuthService = require('./services/auth-service');
@@ -1420,6 +1659,32 @@ app.whenReady().then(async () => {
     }
   });
   
+  // Handle sign-in request
+  ipcMain.handle('sign-in', async (event, data) => {
+    try {
+      logger.info('Received sign-in request');
+      
+      if (!authService) {
+        logger.warn('No auth service available for sign-in');
+        return { success: false, error: 'Authentication service not available' };
+      }
+      
+      const { email, password } = data;
+      const success = await authService.signInWithEmailPassword(email, password);
+      
+      if (success) {
+        logger.info('User signed in successfully');
+        return { success: true };
+      } else {
+        logger.error('Sign-in failed');
+        return { success: false, error: 'Invalid credentials' };
+      }
+    } catch (error) {
+      logger.error('Error in sign-in handler:', error);
+      return { success: false, error: error.message };
+    }
+  });
+  
   // Handle logout request
   ipcMain.handle('logout', async () => {
     try {
@@ -1463,6 +1728,53 @@ app.whenReady().then(async () => {
     }
   });
   
+  // Register the get-user-info handler
+  ipcMain.handle('get-user-info', async () => {
+    logger.info('[MAIN] Getting user info');
+    try {
+      const session = authService.getSession();
+      if (!session || !session.user) {
+        logger.warn('[MAIN] No valid session found for user info request');
+        return null;
+      }
+      
+      // Get user plan information
+      const userPlan = await authService.fetchUserPlan();
+      
+      return {
+        user: session.user,
+        plan: userPlan
+      };
+    } catch (error) {
+      logger.error('[MAIN] Error getting user info:', error);
+      return null;
+    }
+  });
+
+// Permission checking functions
+
+
+// IPC handlers for permission checking
+ipcMain.handle('check-microphone-permission', async () => {
+  return await ensureMicrophoneAccess();
+});
+
+ipcMain.handle('check-screen-permission', async () => {
+  return await ensureScreenRecordingAccess();
+});
+
+ipcMain.on('open-privacy-settings', (event, permissionType) => {
+  const urls = {
+    microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+    screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+  };
+  
+  const url = urls[permissionType];
+  if (url) {
+    shell.openExternal(url);
+  }
+});
+  
   createWindow();
   
   // Register keyboard shortcuts for window movement
@@ -1504,15 +1816,41 @@ app.whenReady().then(async () => {
     app.quit();
   });
   
-  // Register keyboard shortcut for taking screenshots (⌘+H on Mac, Control+H on Windows)
-  globalShortcut.register('CommandOrControl+H', () => {
-    takeScreenshot(false);
+  // Register hotkeys moved from frontend (index.html)
+  // ⌘+L - Start/Stop Recording
+  globalShortcut.register('CommandOrControl+L', () => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-record-button');
+    }
   });
   
-  // Register keyboard shortcut for taking and processing screenshots (⌘+Enter on Mac, Control+Enter on Windows)
-  globalShortcut.register('CommandOrControl+Enter', () => {
-    takeScreenshot(true);
+  // ⌘+Enter - Toggle AI card & ask AI
+  globalShortcut.register('CommandOrControl+Return', () => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-ai-button');
+    }
   });
+  
+  // ⌘+T - Toggle Transcript card
+  globalShortcut.register('CommandOrControl+T', () => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-transcript-toggle');
+    }
+  });
+  
+  // ⌘+Shift+C - Copy AI text
+  globalShortcut.register('CommandOrControl+Shift+C', () => {
+    if (mainWindow) {
+      mainWindow.webContents.send('trigger-copy-ai-text');
+    }
+  });
+
+  // ⌘+Shift+Enter - Take screenshot and process with AI
+  globalShortcut.register('CommandOrControl+Shift+Return', () => {
+    logger.info('Screenshot and AI processing triggered via global shortcut');
+    takeScreenshot(true); // processAfterCapture = true
+  });
+
   
   // Register keyboard shortcut for quick hide (Escape key)
   globalShortcut.register('Escape', () => {
@@ -1559,8 +1897,11 @@ app.whenReady().then(async () => {
 
   // Handle save-context message from server process
   serverProcess.on('message', async (message) => {
-    // Handle save-context message to save context data to database
-    if (message.type === 'save-context' && message.data) {
+    if (message.type === 'error' && message.data.isPersistent) {
+      if (mainWindow) {
+        mainWindow.webContents.send('perm-error', message.data);
+      }
+    } else if (message.type === 'save-context' && message.data) {
       try {
         // Get the user ID from the auth service
         const userId = authService?.getSession()?.user?.id;
@@ -1678,6 +2019,12 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send('context-update', message.data);
       } else if (message.type === 'elaboration') {
         mainWindow.webContents.send('elaboration', message.data);
+      } else if (message.type === 'start-microphone-capture') {
+        // Forward microphone capture start request to renderer
+        mainWindow.webContents.send('start-microphone-capture');
+      } else if (message.type === 'stop-microphone-capture') {
+        // Forward microphone capture stop request to renderer
+        mainWindow.webContents.send('stop-microphone-capture');
       }
     }
   });
@@ -1724,6 +2071,9 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send('suggestion', message.data);
       } else if (message.type === 'suggestion-chunk' && mainWindow) {
         // Handle streaming chunks from OpenAI
+        mainWindow.webContents.send('suggestion-chunk', message.data);
+      } else if (message.type === 'suggestion-partial' && mainWindow) {
+        // Handle streaming chunks from Gemini (screenshot analysis)
         mainWindow.webContents.send('suggestion-chunk', message.data);
       } else if (message.type === 'recording-status' && mainWindow) {
         mainWindow.webContents.send('recording-status', message.data);
