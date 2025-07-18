@@ -1,23 +1,22 @@
 {
   "name": "interview_terminator",
-  "version": "1.0.0",
+  "version": "1.0.4",
+  "type": "commonjs",
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:speaker": "electron test-speaker-detection.js",
     "start": "electron .",
     "server": "node server.js",
     "electron": "electron .",
     "dev": "concurrently \"npm run server\" \"npm run electron\"",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder --mac --win",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
     "build:all": "electron-builder --mac --win",
     "dist:win": "electron-builder --win",
-    "dist:arm64": "bash ./scripts/build-arm64.sh",
-    "build-and-sign": "bash ./scripts/build-and-sign.sh",
-    "build-and-sign:arm64": "bash ./scripts/build-sign-arm64.sh",
-    "setup-sox": "bash ./scripts/setup_sox.sh"
+    "build:swift-system-audio": "(cd swift-audio-capture && swift build --configuration release --arch arm64 --arch x86_64) && lipo -create -output ./bin/AudioCapture ./swift-audio-capture/.build/arm64-apple-macosx/release/swift-audio-capture ./swift-audio-capture/.build/x86_64-apple-macosx/release/swift-audio-capture"
   },
   "keywords": [],
   "author": "",
@@ -31,9 +30,11 @@
     "dotenv-expand": "^12.0.1",
     "electron-log": "^5.3.2",
     "electron-store": "7.0.0",
+    "electron-updater": "^6.6.2",
     "google-gax": "^4.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openai": "^4.87.3",
+    "sharp": "^0.34.2",
     "update-electron-app": "^3.1.1",
     "yargs": "^17.7.2"
   },
@@ -47,66 +48,40 @@
     "productName": "Interview-Terminator",
     "asar": true,
     "asarUnpack": [
-      "node_modules/@google-cloud/speech/**/*",
-      "node_modules/node-record-lpcm16/**/*",
-      "node_modules/google-gax/**/*",
-      "node_modules/@google/generative-ai/**/*",
-      "node_modules/openai/**/*",
-      "node_modules/yargs/**/*",
-      "node_modules/dotenv/**/*"
+      "server.js",
+      "**/node_modules/node-record-lpcm16/**/*",
+      "bin/AudioCapture",
+      "preload.js",
+      "auth-preload.js",
+      "windows-audio-capture.js"
     ],
-    "artifactName": "${productName}-${arch}.${ext}",
+    "artifactName": "${productName}-Setup-${arch}.${ext}",
     "icon": "icon_512x512.png",
+    "publish": {
+      "provider": "github",
+      "owner": "xs00001111",
+      "repo": "interview_terminator"
+    },
     "extraResources": [
       {
-        "from": "bin/${arch}/sox",
-        "to": "bin/sox"
+        "from": "system_prompt.txt",
+        "to": "."
+      },
+      {
+        "from": "server.js",
+        "to": "."
       },
       {
         "from": "bin/AudioCapture",
         "to": "bin/AudioCapture"
       },
       {
-        "from": "server.js",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "sox-audio-capture.js",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "preload.js",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "system_prompt.txt",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": ".env",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
+        "from": ".env.production",
+        "to": "."
       },
       {
         "from": "node_modules",
-        "to": "node_modules",
-        "filter": [
-          "**/*"
-        ]
+        "to": "node_modules"
       }
     ],
     "mac": {
@@ -137,21 +112,30 @@
         }
       ]
     },
+    "dmg": {
+      "title": "InterviewTerminator",
+      "format": "UDZO"
+    },
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": ["x64", "arm64"]
+        }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "signingHashAlgorithms": [],
+      "publisherName": null
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
       "shortcutName": "Interview Terminator",
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     },
     "linux": {
       "target": [
@@ -163,6 +147,7 @@
     },
     "files": [
       "**/*",
+      ".env.production",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
       "!**/node_modules/*.d.ts",
@@ -184,7 +169,8 @@
       "!**/INTEGRATION.md",
       "!ICON_README.md",
       "!fix_permissions.sh",
-      "!swift-audio-performance-report.json"
+      "!swift-audio-performance-report.json",
+      "system_prompt.txt"
     ]
   }
 }

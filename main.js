@@ -12,7 +12,7 @@ for (const p of envCandidates) {
 
 const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer, systemPreferences, shell } = require('electron');
 const { BAR_HEIGHT, EXPANDED_HEIGHT, WINDOW_WIDTH } = require('./constants.js');
-const { fork } = require('child_process');
+const { fork, spawn } = require('child_process');
 const os = require('os');
 
 // Check if we're on macOS 15+ (Sequoia) where Swift AudioCapture handles both mic and system audio
@@ -2200,12 +2200,20 @@ ipcMain.on('mic-permission-denied', async () => {
         // Short delay before restarting to avoid rapid restart cycles
         setTimeout(() => {
           // Create a new server process with the same configuration and environment variables
-          serverProcess = fork(serverPath, [], {
-            stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-          });
+          if (process.platform === 'win32') {
+            serverProcess = spawn(process.execPath, [serverPath], {
+              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+              env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+            });
+          } else {
+            serverProcess = fork(serverPath, [], {
+              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+            });
+          }
           
           // Re-attach all the event handlers
           setupServerProcessHandlers(serverProcess);
+          setupServerMessageHandler(serverProcess);
 
   // Explicit forwarder system to avoid duplicates and make message handling clear
   function forward(channel, data = null) {
@@ -2233,10 +2241,42 @@ ipcMain.on('mic-permission-denied', async () => {
     }
   };
 
-  // Single, consolidated message handler for server process
-  serverProcess.on('message', async (message) => {
+  // Function to set up message handler for server process
+  function setupServerMessageHandler(process) {
+    // Windows-specific debugging for message handler
+    if (process.platform === 'win32') {
+      logger.info('🔍 [MAIN] Setting up Windows message handler');
+      logger.info('🔍 [MAIN] Process connected at handler setup:', process.connected);
+      logger.info('🔍 [MAIN] Process PID at handler setup:', process.pid);
+      
+      // Monitor connection state changes
+      process.on('disconnect', () => {
+        logger.error('❌ [MAIN] Server process DISCONNECTED');
+      });
+      
+      process.on('error', (error) => {
+        logger.error('❌ [MAIN] Server process ERROR:', error.message);
+      });
+      
+      process.on('close', (code, signal) => {
+        logger.error('❌ [MAIN] Server process CLOSED:', { code, signal });
+      });
+      
+      process.on('exit', (code, signal) => {
+        logger.error('❌ [MAIN] Server process EXITED:', { code, signal });
+      });
+    }
+    
+    // Single, consolidated message handler for server process
+    process.on('message', async (message) => {
     // Handle audio capture relay messages
-    logger.info('🔍 [DEBUG] Main received server message:', message?.type);
+    logger.info('🔍 [MAIN→RECEIVED] Main received server message:', message?.type);
+    
+    // Windows-specific detailed logging
+    if (process.platform === 'win32') {
+      logger.info('🔍 [MAIN→RECEIVED] Process still connected:', process.connected);
+      logger.info('🔍 [MAIN→RECEIVED] Message details:', JSON.stringify(message, null, 2));
+    }
     
     // Special handling for test message
     if (message.type === 'test-ipc-connection') {
@@ -2446,6 +2486,7 @@ ipcMain.on('mic-permission-denied', async () => {
       }
     }
   });
+  } // End of setupServerMessageHandler function
           
           // Notify the renderer that we're reconnecting
           if (mainWindow) {
@@ -2481,13 +2522,27 @@ ipcMain.on('mic-permission-denied', async () => {
 
   logger.info(`Starting server process from: ${serverPath}`);
   
-  // Fork the server process with environment variables
-  serverProcess = fork(serverPath, [], {
-    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-  });
+  // Use spawn instead of fork for Windows IPC compatibility
+  // Electron's fork() can have IPC issues on Windows
+  if (process.platform === 'win32') {
+    serverProcess = spawn(process.execPath, [serverPath], {
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_STACK_DUMPING: '1' }
+    });
+    logger.info('Windows: Using spawn() with ELECTRON_RUN_AS_NODE for IPC compatibility');
+  } else {
+    // Use fork on macOS/Linux (works reliably)
+    serverProcess = fork(serverPath, [], {
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+    });
+    logger.info('macOS/Linux: Using fork() for IPC');
+  }
   
   // Set up all the event handlers
   setupServerProcessHandlers(serverProcess);
+  
+  // Attach message handler AFTER process creation
+  setupServerMessageHandler(serverProcess);
 
   // Windows-specific debugging
   logger.info(`🔍 [WINDOWS-DEBUG] Server process created:`);
@@ -2497,6 +2552,29 @@ ipcMain.on('mic-permission-denied', async () => {
   logger.info(`  - Platform: ${process.platform}`);
   logger.info(`  - Node version: ${process.version}`);
   logger.info(`  - Electron version: ${process.versions.electron}`);
+  
+  // Windows-specific connection monitoring
+  if (process.platform === 'win32') {
+    const connectionMonitor = setInterval(() => {
+      if (serverProcess) {
+        logger.info('🔍 [CONNECTION-MONITOR] State:', {
+          connected: serverProcess.connected,
+          killed: serverProcess.killed,
+          exitCode: serverProcess.exitCode,
+          signalCode: serverProcess.signalCode,
+          pid: serverProcess.pid
+        });
+      } else {
+        logger.error('🔍 [CONNECTION-MONITOR] serverProcess is null');
+        clearInterval(connectionMonitor);
+      }
+    }, 3000); // Check every 3 seconds
+    
+    // Clear monitor when app quits
+    app.on('before-quit', () => {
+      clearInterval(connectionMonitor);
+    });
+  }
   
   // Test immediate IPC right after process creation
   setTimeout(() => {

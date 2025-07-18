@@ -1,7 +1,59 @@
+// Preload health check
+try {
+  console.log('[PRELOAD] script started on', process.platform);
+} catch (e) {
+  // In extremely rare cases console is not ready – fall back to a file write, etc.
+}
+
 const { contextBridge, ipcRenderer, dialog } = require('electron');
+const os = require('os');
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
+
+// Check if we're on macOS 15+ (Sequoia) where Swift AudioCapture handles both mic and system audio
+function isMac15Plus() {
+  if (process.platform !== 'darwin') return false;
+  // Darwin 24 == macOS 15 (Sequoia); Darwin 23 == macOS 14, etc.
+  return parseInt(os.release().split('.')[0], 10) >= 24;
+}
+
+// Microphone permission detection
+async function requestMicPermission() {
+  // macOS 15+ → Swift capture has the mic already; skip the Web API check
+  const isMac15 = isMac15Plus();
+  console.log('[PRELOAD] isMac15Plus():', isMac15, 'platform:', process.platform, 'release:', os.release());
+  if (isMac15) {
+    console.log('[PRELOAD] Skipping Web API microphone check for macOS 15+');
+    return Promise.resolve({ ok: true, skipped: true });
+  }
+  
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // notify the main process and close the stream immediately
+    ipcRenderer.send('mic-status', { ok: true });
+    stream.getTracks().forEach(t => t.stop());
+    return { ok: true };
+  } catch (err) {
+    ipcRenderer.send('mic-status', {
+      ok: false,
+      name: err.name,
+      message: err.message,
+    });
+    
+    // Handle Windows-specific permission errors
+    if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+      ipcRenderer.send('mic-permission-denied');
+    } else {
+      // tell main process to show a helper dialog for other errors
+      ipcRenderer.send('open-privacy-settings', process.platform);
+    }
+    return { ok: false, name: err.name, message: err.message };
+  }
+}
+
+contextBridge.exposeInMainWorld('mic', { request: requestMicPermission });
+
 // Expose auth methods
 contextBridge.exposeInMainWorld('auth', {
   completeLogin: (data) => {
@@ -69,6 +121,11 @@ contextBridge.exposeInMainWorld('electron', {
   startMicrophoneCapture: () => ipcRenderer.send('start-microphone-capture'),
   stopMicrophoneCapture: () => ipcRenderer.send('stop-microphone-capture'),
   sendMicrophoneData: (audioData) => ipcRenderer.send('microphone-data', audioData),
+  
+  // Windows audio capture
+  sendSystemAudioData: (audioData) => ipcRenderer.send('system-audio-data', audioData),
+  onStartWindowsAudioCapture: (callback) => ipcRenderer.on('start-windows-audio-capture', () => callback()),
+  onStopWindowsAudioCapture: (callback) => ipcRenderer.on('stop-windows-audio-capture', () => callback()),
   
   // Context setting
   setContextText: (text) => ipcRenderer.send('set-context-text', text),
@@ -152,8 +209,14 @@ contextBridge.exposeInMainWorld('electron', {
   checkScreenPermission: () => ipcRenderer.invoke('check-screen-permission'),
   openPrivacySettings: (permissionType) => ipcRenderer.send('open-privacy-settings', permissionType),
   
+  // Microphone access checking
+  checkMicrophoneAccess: () => {
+    return window.mic.request();
+  },
+  
   // Permission error events
   onPermError: (callback) => ipcRenderer.on('perm-error', (_, errorData) => callback(errorData)),
+  onMicStatus: (callback) => ipcRenderer.on('mic-status-update', (_, data) => callback(data)),
   
   // Hotkey trigger events
   onTriggerRecordButton: (callback) => ipcRenderer.on('trigger-record-button', () => callback()),
@@ -164,5 +227,18 @@ contextBridge.exposeInMainWorld('electron', {
   // Generic send and on methods for flexibility
   send: (channel, ...args) => ipcRenderer.send(channel, ...args),
   on: (channel, callback) => ipcRenderer.on(channel, (_, ...args) => callback(...args)),
-  invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args)
+  invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+  
+  // Preload microphone check
+  preloadMicCheck: () => ipcRenderer.invoke('preload-mic-check')
+});
+
+// Handle microphone access check requests from main process
+ipcRenderer.on('check-microphone-access', async (_e, { id }) => {
+  console.log('[PRELOAD] Checking microphone access with ID:', id);
+  const result = await requestMicPermission();
+  console.log('[PRELOAD] Microphone access result:', result);
+  
+  // Send the result back to main process with the request ID
+  ipcRenderer.send('mic-status', { id, ...result });
 });

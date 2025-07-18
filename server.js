@@ -1,3 +1,15 @@
+// ---- load env from wherever it lives (asar or resources root) ----
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+const envCandidates = [
+  path.join(__dirname, '.env.production'),               // inside asar (mac build)
+  path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
+];
+for (const p of envCandidates) {
+  if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
+}
+
 const languageCode = 'en-US';
 const streamingLimit = 60000;
 
@@ -14,8 +26,6 @@ const AUDIO_CONFIG = {
   // Recognition optimization
   ENABLE_AUTOMATIC_PUNCTUATION: true, // Enable for better transcript readability
   ENABLE_WORD_TIME_OFFSETS: true, // Enable for potential future features
-  // USE_ENHANCED_MODEL: false, // Use standard model for speed (can be true with telephony)
-  // MODEL: 'telephony' // Better for continuous conversation
 }; 
 
 // Audio format conversion function: 32-bit float to 16-bit LINEAR16
@@ -41,17 +51,12 @@ function convertFloat32ToLinear16(float32Buffer) {
 }
 
 const {Writable} = require('stream');
-const recorder = require('node-record-lpcm16');
 const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
 const os = require('os');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 const events = require('events');
-const dotenv = require('dotenv');
 const dotenvExpand = require('dotenv-expand');
-
 
 const log = require('electron-log');
 
@@ -137,12 +142,21 @@ let client, genAI, model, openai;
 // Optimize PATH setup
 function setupBinPath() {
   if (process.env.NODE_ENV === 'production') {
-    const binPath = path.join(process.resourcesPath, 'bin');
-    process.env.PATH = `${binPath}:${process.env.PATH}`;
+    let binPath;
+    if (process.platform === 'darwin') {
+      // macOS: binaries are in extraResources
+      binPath = path.join(process.resourcesPath, 'bin');
+    } else {
+      // Windows: binaries are in extraResources
+      binPath = path.join(path.dirname(process.execPath), 'resources', 'bin');
+    }
+    const pathSeparator = process.platform === 'win32' ? ';' : ':';
+    process.env.PATH = `${binPath}${pathSeparator}${process.env.PATH}`;
     console.log('Production mode: Using bundled binaries from', binPath);
   } else {
     const binPath = path.join(__dirname, 'bin');
-    process.env.PATH = `${binPath}:${process.env.PATH}`;
+    const pathSeparator = process.platform === 'win32' ? ';' : ':';
+    process.env.PATH = `${binPath}${pathSeparator}${process.env.PATH}`;
     console.log('Development mode: Using bundled binaries from', binPath);
   }
 }
@@ -152,8 +166,16 @@ function setupBinPath() {
 // Consolidate environment loading
 function loadEnvironmentVariables() {
   let envConfig;
-  if (process.resourcesPath) {
-    envConfig = dotenv.config({ path: path.join(process.resourcesPath, '.env') });
+  if (process.env.NODE_ENV === 'production') {
+    let envPath;
+    if (process.platform === 'darwin') {
+      // macOS: .env.production is in extraResources
+      envPath = path.join(process.resourcesPath, '.env.production');
+    } else {
+      // Windows: .env.production is in extraResources
+      envPath = path.join(path.dirname(process.execPath), 'resources', '.env.production');
+    }
+    envConfig = dotenv.config({ path: envPath });
   } else {
     envConfig = dotenv.config();
   }
@@ -329,6 +351,24 @@ function startScreenCaptureKitAndMicrophone() {
   console.log('Microphone capture request sent to renderer.');
 }
 
+function startWindowsWebAPICapture() {
+  console.log('🔍 [DEBUG] startWindowsWebAPICapture() function called');
+  console.log('🔍 [DEBUG] Server process.send available:', typeof process.send);
+  console.log('🔍 [DEBUG] Server process.connected:', process.connected);
+  
+  // Signal the renderer process to start both microphone and system audio capture
+  console.log('🔍 [DEBUG] About to send start-windows-audio-capture message to main process');
+  
+  try {
+    process.send({ type: 'start-windows-audio-capture' });
+    console.log('🔍 [DEBUG] start-windows-audio-capture message sent successfully');
+  } catch (error) {
+    console.error('🔍 [DEBUG] Failed to send message to main process:', error);
+  }
+  
+  console.log('🎙️ Windows audio capture request sent to renderer.');
+}
+
 
 
 async function startRecordingWithSwiftCapture() {
@@ -484,6 +524,15 @@ function startRecording() {
   recordingStartClickTime = Date.now();
   console.log('🎯 [TIMING] User clicked "Start Listening" - beginning audio capture startup');
   
+  // Test IPC connection by sending a test message first
+  console.log('🔍 [DEBUG] Testing IPC connection - sending test message');
+  try {
+    process.send({ type: 'test-ipc-connection', data: 'IPC test from server' });
+    console.log('🔍 [DEBUG] Test IPC message sent successfully');
+  } catch (error) {
+    console.error('🔍 [DEBUG] Failed to send test IPC message:', error);
+  }
+  
   isRecording = true;
   process.send({ type: 'recording-started' });
 
@@ -492,7 +541,12 @@ function startRecording() {
   // Reset dual stream manager for new recording session
   dualStreamManager.stopConcurrentProcessing();
 
-  if (useSwiftAudioCapture) {
+  if (process.platform === 'win32') {
+    // Windows: Use Web APIs for both microphone and system audio
+    console.log('🔄 Starting Windows Web API audio capture');
+    startWindowsWebAPICapture();
+    startStream();
+  } else if (useSwiftAudioCapture) {
     startRecordingWithSwiftCapture();
   } else {
     // On older macOS versions, use ScreenCaptureKit for system audio
@@ -592,6 +646,11 @@ async function stopRecording() {
       }
     }
     
+    // Stop Windows Web API audio capture if it's running
+    if (process.platform === 'win32') {
+      process.send({ type: 'stop-windows-audio-capture' });
+    }
+    
     // Shared memory recording functionality removed
     
     // Pipe streams are no longer used, so no need to destroy them here.
@@ -682,8 +741,48 @@ async function retrieveUserContext(userId) {
   }
 }
 
+// Windows-specific debugging for outgoing IPC messages
+if (process.platform === 'win32') {
+  let outgoingCount = 0;
+  const originalSend = process.send;
+  if (originalSend) {
+    process.send = function(message) {
+      outgoingCount++;
+      console.log(`🔍 [SERVER→MAIN] #${outgoingCount} Attempting to send:`, message.type);
+      console.log(`🔍 [SERVER→MAIN] Process connected:`, process.connected);
+      console.log(`🔍 [SERVER→MAIN] Process PID:`, process.pid);
+      
+      try {
+        const result = originalSend.call(this, message);
+        console.log(`🔍 [SERVER→MAIN] #${outgoingCount} Send result:`, result);
+        console.log(`🔍 [SERVER→MAIN] #${outgoingCount} Still connected after send:`, process.connected);
+        return result;
+      } catch (error) {
+        console.error(`❌ [SERVER→MAIN] #${outgoingCount} Send failed:`, error.message);
+        console.error(`❌ [SERVER→MAIN] #${outgoingCount} Error stack:`, error.stack);
+        throw error;
+      }
+    };
+  } else {
+    console.error('❌ [SERVER→MAIN] process.send is not available!');
+  }
+}
+
 // Listen for messages from the main process
 process.on('message', async (message) => { // Make handler async
+  console.log('🔍 [WINDOWS-DEBUG] Server received message from main:', message.type);
+  
+  if (message.type === 'ping-from-main') {
+    console.log('🔍 [WINDOWS-DEBUG] Received ping from main, sending pong back');
+    try {
+      process.send({ type: 'pong-from-server', originalTimestamp: message.timestamp, serverTimestamp: Date.now() });
+      console.log('🔍 [WINDOWS-DEBUG] Pong sent back to main');
+    } catch (error) {
+      console.error('🔍 [WINDOWS-DEBUG] Failed to send pong back:', error);
+    }
+    return;
+  }
+  
   if (message.type === 'start-recording') {
     if (!isRecording) {
       // Plan verification is now handled in main.js
@@ -705,10 +804,55 @@ process.on('message', async (message) => { // Make handler async
   } else if (message.type === 'stop-microphone-capture') {
     // Signal renderer to stop getUserMedia microphone capture
     process.send({ type: 'stop-microphone-capture' });
+  } else if (message.type === 'start-windows-audio-capture') {
+    // Signal renderer to start Windows Web API audio capture
+    console.log('🔍 [DEBUG] Server sending start-windows-audio-capture to main process');
+    process.send({ type: 'start-windows-audio-capture' });
+    console.log('🔍 [DEBUG] Server sent start-windows-audio-capture message');
+  } else if (message.type === 'stop-windows-audio-capture') {
+    // Signal renderer to stop Windows Web API audio capture
+    process.send({ type: 'stop-windows-audio-capture' });
   } else if (message.type === 'microphone-data') {
     // Handle microphone audio data from renderer
+    console.log(`🔍 [DEBUG] Server received microphone-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
     if (message.data && microphoneAudioInputStreamTransform) {
-      microphoneAudioInputStreamTransform.write(message.data);
+      // Ensure data is a Buffer for stream writing
+      const audioBuffer = Buffer.isBuffer(message.data) ? message.data : Buffer.from(message.data);
+      console.log(`🔍 [DEBUG] Writing microphone data to stream: ${audioBuffer.length} bytes`);
+      microphoneAudioInputStreamTransform.write(audioBuffer);
+    } else {
+      console.log(`⚠️ [DEBUG] Microphone data dropped - data: ${!!message.data}, stream: ${!!microphoneAudioInputStreamTransform}`);
+    }
+  } else if (message.type === 'system-audio-data') {
+    // Handle system audio data from renderer (Windows Web API capture)
+    console.log(`🔍 [DEBUG] Server received system-audio-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
+    if (message.data && systemAudioInputStreamTransform) {
+      // Ensure data is a Buffer for stream writing
+      const audioBuffer = Buffer.isBuffer(message.data) ? message.data : Buffer.from(message.data);
+      console.log(`🔍 [DEBUG] Writing system audio data to stream: ${audioBuffer.length} bytes`);
+      systemAudioInputStreamTransform.write(audioBuffer);
+    } else {
+      console.log(`⚠️ [DEBUG] System audio data dropped - data: ${!!message.data}, stream: ${!!systemAudioInputStreamTransform}`);
+    }
+  } else if (message.type === 'microphone-audio-meta') {
+    // Handle microphone audio metadata (sample rate, etc.)
+    if (message.data && message.data.rate) {
+      console.log(`🎵 Microphone sample rate: ${message.data.rate}Hz`);
+      // Update speech config if needed for different sample rates
+      // Google Speech API supports 8kHz, 16kHz, 44.1kHz, 48kHz
+    }
+  } else if (message.type === 'system-audio-meta') {
+    // Handle system audio metadata (sample rate, etc.)
+    if (message.data && message.data.rate) {
+      console.log(`🎵 System audio sample rate: ${message.data.rate}Hz`);
+      // Update speech config if needed for different sample rates
+      // Google Speech API supports 8kHz, 16kHz, 44.1kHz, 48kHz
+    }
+  } else if (message.type === 'system-audio-missing') {
+    // Handle system audio missing (mic-only mode)
+    console.warn('⚠️ System audio missing – enabling mic-only mode');
+    if (dualStreamManager) {
+      dualStreamManager.enableMicOnlyMode();
     }
   } else if (message.type === 'retrieve-context') {
     // Skip context retrieval if interview is already in progress
@@ -1229,22 +1373,23 @@ async function initializeChat() {
 
 // Initialize chat with default configuration
 // Will be properly initialized when context is loaded or by initializeChat()
-// Read system prompt from file
+// Read system prompt from file using three-candidate approach
+const candidatePaths = [
+  path.join(__dirname, 'system_prompt.txt'),             // current directory
+  path.join(process.cwd(), 'system_prompt.txt'),         // working directory
+  path.join(process.resourcesPath || '', 'system_prompt.txt') // packaged app resources
+];
 
-// Determine if we're running in a packaged app
-let systemPrompt;
-try {
-  // In development mode, read from the local file
-  systemPrompt = fs.readFileSync('system_prompt.txt', 'utf8');
-} catch (error) {
-  // In production/packaged mode, read from the resources directory
-  if (process.resourcesPath) {
-    const resourcePath = path.join(process.resourcesPath, 'system_prompt.txt');
-    systemPrompt = fs.readFileSync(resourcePath, 'utf8');
-  } else {
-    console.error('Failed to load system prompt:', error);
-    systemPrompt = ''; // Fallback to empty prompt
+let systemPrompt = '';
+for (const p of candidatePaths) {
+  if (fs.existsSync(p)) {
+    systemPrompt = fs.readFileSync(p, 'utf8');
+    console.log(`✅ Loaded system_prompt.txt from: ${p}`);
+    break;
   }
+}
+if (!systemPrompt) {
+  console.warn('[WARN] system_prompt.txt not found, continuing with empty prompt');
 }
 
 // Initialize chat based on selected AI provider
@@ -1387,7 +1532,39 @@ function startStream() {
     } else {
       console.log('⚠️ Waiting for both streams to become active...');
     }
-    }, 1000);  
+    }, 1000);
+    
+  // System audio is critical - fail if it doesn't start within timeout
+  const SYSTEM_AUDIO_TIMEOUT = 5000;
+  setTimeout(() => {
+    const status = dualStreamManager.getStreamStatus();
+    console.log(`🔍 [DEBUG] Timeout check - Stream status:`, status);
+    console.log(`🔍 [DEBUG] isRecording: ${isRecording}, recordingStartClickTime: ${recordingStartClickTime}`);
+    
+    if (!status.systemAudio) {
+      console.error('❌ CRITICAL: System audio failed to start within 5 seconds');
+      console.error('❌ System audio is required to hear interviewer questions');
+      console.error('❌ Stopping recording session...');
+      
+      // Stop recording and notify user of failure
+      isRecording = false;
+      
+      // Send failure message to main process
+      process.send({ 
+        type: 'recording-failed', 
+        reason: 'System audio capture failed to start. Please check your audio settings and try again.' 
+      });
+      
+      // Stop any active streams
+      stopRecording();
+    } else if (!status.microphone) {
+      console.warn('⚠️ Microphone missing but system audio active - continuing with system audio only');
+      // System audio is working, that's what matters most
+      if (!status.concurrent) {
+        dualStreamManager.enableSystemAudioOnlyMode();
+      }
+    }
+  }, SYSTEM_AUDIO_TIMEOUT);  
 }
 
 function startMicrophoneStream() {
@@ -1852,6 +2029,30 @@ class DualStreamManager {
     return this.concurrentProcessing && this.microphoneStreamActive && this.systemAudioStreamActive;
   }
 
+  enableMicOnlyMode() {
+    if (this.microphoneStreamActive && !this.systemAudioStreamActive) {
+      this.concurrentProcessing = true;
+      console.log('🎤 Microphone-only processing enabled');
+      
+      // Start speech stream processing for microphone only
+      if (microphoneRecognizeStream) {
+        console.log('✅ Microphone stream is active and processing');
+      }
+    }
+  }
+
+  enableSystemAudioOnlyMode() {
+    if (this.systemAudioStreamActive) {
+      this.concurrentProcessing = true;
+      console.log('🖥️ System audio-only processing enabled (most important for interview questions)');
+      
+      // Start speech stream processing for system audio only
+      if (systemAudioRecognizeStream) {
+        console.log('✅ System audio stream is active and processing');
+      }
+    }
+  }
+
   getStreamStatus() {
     return {
       microphone: this.microphoneStreamActive,
@@ -1866,14 +2067,18 @@ const dualStreamManager = new DualStreamManager();
 // Separate audio input transforms for microphone and system audio
 const microphoneAudioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
+    console.log(`🔍 [DEBUG] Microphone audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
+    
     // Only process chunks if we're actively recording
     if (!isRecording) {
+      console.log(`⚠️ [DEBUG] Dropping microphone chunk because isRecording=${isRecording}`);
       next();
       return;
     }
     
     // Mark microphone stream as active for dual stream management
     if (!dualStreamManager.microphoneStreamActive) {
+      console.log('✅ [DEBUG] Marking microphone stream as ACTIVE');
       dualStreamManager.setMicrophoneStreamStatus(true);
       
       // Track first audio data received
@@ -2010,14 +2215,18 @@ let systemAudioBufferStartTime = null; // Track when system audio buffer started
 
 const systemAudioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
+    console.log(`🔍 [DEBUG] System audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
+    
     // Only process chunks if we're actively recording
     if (!isRecording) {
+      console.log(`⚠️ [DEBUG] Dropping system audio chunk because isRecording=${isRecording}`);
       next();
       return;
     }
     
     // Mark system audio stream as active for dual stream management
     if (!dualStreamManager.systemAudioStreamActive) {
+      console.log('✅ [DEBUG] Marking system audio stream as ACTIVE');
       dualStreamManager.setSystemAudioStreamStatus(true);
       
       // Track first system audio data received (only if microphone hasn't already logged)
@@ -3199,9 +3408,18 @@ let audioPreInitialized = false;
 
 // Function to request permissions interactively
 function requestPermissionsInteractively(permissionType) {
-  const swiftToolPath = process.env.NODE_ENV === 'production'
-    ? path.join(process.resourcesPath, 'bin', 'AudioCapture')
-    : path.join(__dirname, 'bin', 'AudioCapture');
+  let swiftToolPath;
+  if (process.env.NODE_ENV === 'production') {
+    if (process.platform === 'darwin') {
+      // macOS: AudioCapture is in extraResources
+      swiftToolPath = path.join(process.resourcesPath, 'bin', 'AudioCapture');
+    } else {
+      // Windows: AudioCapture is in extraResources
+      swiftToolPath = path.join(path.dirname(process.execPath), 'resources', 'bin', 'AudioCapture');
+    }
+  } else {
+    swiftToolPath = path.join(__dirname, 'bin', 'AudioCapture');
+  }
 
   if (!fs.existsSync(swiftToolPath)) {
     console.error('Swift audio capture tool not found for permission request');
@@ -3289,9 +3507,18 @@ async function preInitializeAudioCapture() {
     // Shared memory support removed
     
     // Pre-spawn the Swift process but don't start capture yet
-    const swiftToolPath = process.env.NODE_ENV === 'production'
-      ? path.join(process.resourcesPath, 'bin', 'AudioCapture')
-      : path.join(__dirname, 'bin', 'AudioCapture');
+    let swiftToolPath;
+    if (process.env.NODE_ENV === 'production') {
+      if (process.platform === 'darwin') {
+        // macOS: AudioCapture is in extraResources
+        swiftToolPath = path.join(process.resourcesPath, 'bin', 'AudioCapture');
+      } else {
+        // Windows: AudioCapture is in extraResources
+        swiftToolPath = path.join(path.dirname(process.execPath), 'resources', 'bin', 'AudioCapture');
+      }
+    } else {
+      swiftToolPath = path.join(__dirname, 'bin', 'AudioCapture');
+    }
     
     // Just verify the tool exists and is executable, then run permission check
     if (fs.existsSync(swiftToolPath)) {

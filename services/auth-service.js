@@ -420,6 +420,27 @@ class AuthService extends EventEmitter {
   getSubscription() {
     return this.subscription;
   }
+
+  async getUserInfo() {
+    if (!this.session || !this.session.user) {
+      return null;
+    }
+
+    // Fetch the latest user plan to ensure interviews_remaining is up-to-date
+    const latestPlan = await this.fetchUserPlan();
+
+    // Map the plan_type field to type for frontend compatibility
+    const mappedPlan = latestPlan ? {
+      ...latestPlan,
+      type: latestPlan.plan_type // Map plan_type to type
+    } : null;
+
+    // Return basic user info and the current plan, including interviews_remaining
+    return {
+      user: this.session.user,
+      plan: mappedPlan // This will be the full plan object with interviews_remaining and type field
+    };
+  }
 }
 
 module.exports = AuthService;

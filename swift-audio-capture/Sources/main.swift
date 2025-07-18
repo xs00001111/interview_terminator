@@ -87,20 +87,41 @@ class AudioCaptureManager: NSObject, SCStreamOutput {
     
     // MARK: - Permission Management
     
-    func checkScreenRecordingPermission() -> Bool {
-        // For ScreenCaptureKit, we need to check if we can access screen content
-        // This is a basic check - the actual permission dialog will be triggered when we try to capture
-        let canRecord = CGPreflightScreenCaptureAccess()
+    func checkScreenRecordingPermission() async -> Bool {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            // A more reliable check for screen recording permission is to see if any displays are available.
+            // If `content.displays` is empty, it's a strong indicator that permission is denied.
+            screenRecordingPermissionGranted = !content.displays.isEmpty
+            return screenRecordingPermissionGranted
+        } catch {
+            screenRecordingPermissionGranted = false
+            return false
+        }
+    }
+    
+    func ensureScreenRecording(_ onGranted: @escaping () -> Void) {
+        if CGPreflightScreenCaptureAccess() {
+            onGranted()  // already authorized - go ahead
+            return
+        }
         
-        if canRecord {
-            print("✅ Screen recording permission available")
-            screenRecordingPermissionGranted = true
-            return true
-        } else {
-            print("⚠️ Screen recording permission may be required")
-            print("💡 If prompted, please enable screen recording access in System Preferences > Security & Privacy > Privacy > Screen Recording")
-            // We'll still attempt to set up capture as the permission dialog might appear
-            return true
+        // Show primer message
+        print("🔔 Interm AI needs to capture system audio")
+        print("This lets the assistant hear the interviewer and give you real-time answers. You'll be asked to allow Screen Recording next.")
+        
+        // Request permission on main thread
+        DispatchQueue.main.async {
+            let ok = CGRequestScreenCaptureAccess()
+            if ok {
+                // user ticked the box and relaunched
+                onGranted()
+            } else {
+                // Show actionable error + Settings link
+                print("❌ Screen-recording access is still off.")
+                print("💡 Turn it on in System Settings ▶ Privacy & Security ▶ Screen Recording, tick Interm AI, then quit and reopen the app.")
+                exit(2) // Exit with code 2 to indicate screen recording permission denied
+            }
         }
     }
     
@@ -115,7 +136,7 @@ class AudioCaptureManager: NSObject, SCStreamOutput {
         return granted
     }
     
-    private func requestScreenRecordingPermission() -> Bool {
+    func requestScreenRecordingPermission() -> Bool {
         // Request screen recording permission by attempting to access screen content
         let success = CGRequestScreenCaptureAccess()
         
@@ -138,62 +159,69 @@ class AudioCaptureManager: NSObject, SCStreamOutput {
 
     
     // Pre-fetch shareable content for faster system audio setup
-    func preloadShareableContent() async -> Void {
+    func preloadShareableContent() async -> Bool {
+        // Only attempt to preload if permission is granted.
+        guard screenRecordingPermissionGranted else { return false }
         do {
             print("🔄 Pre-loading shareable content...")
             cachedShareableContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            print("✅ Shareable content pre-loaded")
+            // Avoid printing success message if content is empty (permission denied)
+            if !(cachedShareableContent?.applications.isEmpty ?? true) {
+                print("✅ Shareable content pre-loaded")
+            }
+            return true
         } catch {
-            print("⚠️ Failed to pre-load shareable content: \(error)")
+            // Suppress error messages when pre-loading fails due to permissions.
+            if let scError = error as? SCStreamError, scError.code == .userDeclined {
+                // This is an expected failure when permissions are not granted.
+            } else {
+                print("⚠️ Failed to pre-load shareable content: \(error)")
+            }
+            return false
         }
     }
     
     // Optimize system audio setup with faster configuration using cached content
     private func setupSystemAudioCapture() async {
         do {
-            // Get available content
+            // Use cached content immediately
             let content: SCShareableContent
-            if let cached = cachedShareableContent {
-                content = cached
+            if let cachedContent = cachedShareableContent {
+                content = cachedContent
             } else {
-                content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                // Fallback to fresh content if cache miss
+                let freshContent = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                cachedShareableContent = freshContent
+                content = freshContent
             }
             
-            // Create filter for system audio only
-            let displays = content.displays
-            let filter: SCContentFilter
-            if let primaryDisplay = displays.first {
-                filter = SCContentFilter(display: primaryDisplay, excludingApplications: [], exceptingWindows: [])
-            } else {
-                throw NSError(domain: "AudioCaptureManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "No display available for capture"])
-            }
+            // Create filter with minimal configuration
+            let filter = SCContentFilter(display: content.displays.first!, 
+                                       excludingApplications: [], 
+                                       exceptingWindows: [])
             
-            // Optimized configuration with Google Speech-to-Text compatible sample rate
+            // Pre-configured optimized settings
             let config = SCStreamConfiguration()
             config.capturesAudio = true
-            if #available(macOS 15.0, *) {
-                config.captureMicrophone = true  // Enable microphone capture
-            }
             config.excludesCurrentProcessAudio = true
-            config.sampleRate = 16000  // Google Speech-to-Text optimal sample rate
-            config.channelCount = 1    // Mono for speech recognition
+            config.sampleRate = 16000
+            config.channelCount = 1
             
-            // Create optimized stream
+            if #available(macOS 15.0, *) {
+                config.captureMicrophone = true
+            }
+            
+            // Create and start stream in one operation
             screenCaptureStream = SCStream(filter: filter, configuration: config, delegate: self)
             
-            // Add stream outputs based on macOS version
+            // Add outputs with high priority queue
+            let queue = DispatchQueue.global(qos: .userInitiated)
+            try screenCaptureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+            
             if #available(macOS 15.0, *) {
-                // Use separate outputs for system audio and microphone on macOS 15+
-                try screenCaptureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: .global(qos: .userInitiated))
-                try screenCaptureStream?.addStreamOutput(self, type: SCStreamOutputType(rawValue: 2)!, sampleHandlerQueue: .global(qos: .userInitiated)) // .microphone
-                print("✅ System audio and microphone capture configured (separate streams)")
-            } else {
-                // Use merged audio output on older macOS versions
-                try screenCaptureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: .global())
-                print("✅ Audio capture configured (merged stream - requires macOS 15.0+ for separate tracks)")
+                try screenCaptureStream?.addStreamOutput(self, type: SCStreamOutputType(rawValue: 2)!, sampleHandlerQueue: queue)
             }
             
-            // Start capture
             try await screenCaptureStream?.startCapture()
         } catch {
             print("❌ Failed to setup system audio capture: \(error)")
@@ -204,20 +232,18 @@ class AudioCaptureManager: NSObject, SCStreamOutput {
     
     // Highly optimized startCapture function with maximum parallelization
     func startCapture() async {
-        // Check permissions first
-        guard checkScreenRecordingPermission() else {
-            print("❌ Screen recording permission required")
-            return
-        }
-        
-        // Check microphone permission
+        // Check microphone permission first
         guard await checkMicrophonePermission() else {
             print("❌ Microphone permission required")
             return
         }
         
-        // Setup both system audio and microphone capture using ScreenCaptureKit
-        await setupSystemAudioCapture()
+        // Ensure screen recording permission and setup capture
+        ensureScreenRecording { [weak self] in
+            Task {
+                await self?.setupSystemAudioCapture()
+            }
+        }
     }
     
     func stopCapture() {
@@ -319,6 +345,25 @@ extension AudioCaptureManager: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         print("❌ Stream stopped with error: \(error)")
     }
+    
+    // Add a background content refresh
+    private func refreshShareableContentInBackground() {
+        Task {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                await MainActor.run {
+                    self.cachedShareableContent = content
+                }
+            } catch {
+                print("Failed to refresh shareable content: \(error)")
+            }
+        }
+    }
+    
+    // Call this periodically or on app launch
+    func preWarmContent() {
+        refreshShareableContentInBackground()
+    }
 }
 
 // Helper class for system audio capture coordination
@@ -340,32 +385,77 @@ func signalHandler(_ signal: Int32) {
 @available(macOS 12.3, *)
 func checkPermissions() async {
     print("🔐 Checking audio capture permissions...")
+
+    let captureManager = AudioCaptureManager()
+    // Perform checks concurrently
+    async let micPermission = captureManager.checkMicrophonePermission()
+    async let screenPermission = captureManager.checkScreenRecordingPermission()
+
+    let (micOK, screenOK) = await (micPermission, screenPermission)
+
+    // Attempt to preload content only if screen permission seems to be granted
+    if screenOK {
+        _ = await captureManager.preloadShareableContent()
+    }
+
+    print("\n📋 Permission Check Results:")
+    print("🎤 Microphone: \(micOK ? "✅ Available" : "❌ Not Available")")
+    print("🖥️  Screen Recording: \(screenOK ? "✅ Available" : "❌ Not Available")")
+
+    if micOK && screenOK {
+        print("\n✅ All required permissions are available.")
+        exit(0)
+    } else {
+        // The server will interpret this and show the correct modal
+        exit(1)
+    }
+}
+
+// Permission request mode function
+@available(macOS 12.3, *)
+func requestPermissions() async {
+    print("🔐 Requesting audio capture permissions...")
     
     let captureManager = AudioCaptureManager()
     
-    // Request permissions in parallel
-    async let screenPermission = captureManager.checkScreenRecordingPermission()
-    async let contentPreload: Void = captureManager.preloadShareableContent()
+    // Request microphone permission
+    let microphoneGranted = await captureManager.checkMicrophonePermission()
     
-    // Wait for all permissions
-    let screenAvailable = await screenPermission
-    await contentPreload
+    // Request screen recording permission
+    print("🔄 Requesting screen recording permission...")
+    let screenGranted = captureManager.requestScreenRecordingPermission()
     
-    print("\n📋 Permission Check Results:")
-    print("🖥️  Screen Recording: \(screenAvailable ? "✅ Available" : "❌ Not Available")")
+    print("\n📋 Permission Request Results:")
+    print("🎤 Microphone: \(microphoneGranted ? "✅ Granted" : "❌ Denied")")
+    print("🖥️  Screen Recording: \(screenGranted ? "✅ Granted" : "❌ Denied")")
     
-    // Exit after checking permissions
-    exit(0)
+    if microphoneGranted && screenGranted {
+        print("\n✅ All permissions granted successfully!")
+        exit(0)
+    } else {
+        print("\n❌ Some permissions were denied. Please grant them in System Preferences.")
+        exit(1)
+    }
 }
 
 // Main execution
 @available(macOS 12.3, *)
 func main() {
-    // Check for permission-check flag
     let args = CommandLine.arguments
+    
+    // Check for permission-check flag
     if args.contains("--permission-check") {
         Task {
             await checkPermissions()
+        }
+        RunLoop.main.run()
+        return
+    }
+    
+    // Check for permission-request flag
+    if args.contains("--request-permissions") {
+        Task {
+            await requestPermissions()
         }
         RunLoop.main.run()
         return
@@ -385,8 +475,8 @@ func main() {
     // Start capture asynchronously
     Task {
         await captureManager.startCapture()
-        print("✅ Audio capture initialization complete")
     }
+    print("✅ Audio capture initialization complete")
     
     // Keep the program running
     RunLoop.main.run()

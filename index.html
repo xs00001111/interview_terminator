@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Compact UI Demo - Interview Terminator</title>
+    <title>Interview Terminator</title>
     <link rel="stylesheet" href="styles-plan-modal.css">
     
     <!-- Prism.js for syntax highlighting -->
@@ -12,7 +12,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
     
     <!-- MathJax for LaTeX rendering -->
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script>
         window.MathJax = {
@@ -2008,13 +2007,21 @@
         let isRecording = false;
         let isProcessing = false;
 
-        recordBtn.addEventListener('click', () => {
+        recordBtn.addEventListener('click', async () => {
             if (!isLoggedIn) {
                 loginBtn.click();
                 return;
             }
 
             if (!isRecording) {
+                // Check microphone permissions before starting recording
+                console.log('[RENDERER] Starting recording - checking microphone access...');
+                const micResult = await window.electron.preloadMicCheck();
+                if (!micResult.ok && !micResult.skipped) {
+                    console.error('[RENDERER] Cannot start recording - microphone access denied:', micResult);
+                    return;
+                }
+                
                 // Start recording - show loading state first
                 window.electron.startRecording();
                 isRecording = true;
@@ -3243,16 +3250,29 @@
     <!-- Microphone capture for older macOS versions -->
     <script src="microphone-capture.js"></script>
     
+    <!-- Windows audio capture for Windows platform -->
+    <script src="windows-audio-capture.js"></script>
+    
     <script>
         // Handle microphone capture events from main process
         if (window.electron) {
             // Listen for server messages forwarded by main process
-            window.electron.onMicrophoneCaptureStart && window.electron.onMicrophoneCaptureStart(() => {
+            window.electron.startMicrophoneCapture(() => {
                 document.dispatchEvent(new CustomEvent('start-microphone-capture'));
             });
             
-            window.electron.onMicrophoneCaptureStop && window.electron.onMicrophoneCaptureStop(() => {
+            window.electron.stopMicrophoneCapture(() => {
                 document.dispatchEvent(new CustomEvent('stop-microphone-capture'));
+            });
+            
+            // Handle Windows audio capture events from main process
+            window.electron.onStartWindowsAudioCapture(() => {
+                console.log('[RENDERER] start-windows-audio-capture received');
+                document.dispatchEvent(new CustomEvent('start-windows-audio-capture'));
+            });
+            
+            window.electron.onStopWindowsAudioCapture(() => {
+                document.dispatchEvent(new CustomEvent('stop-windows-audio-capture'));
             });
         }
     </script>
@@ -3305,6 +3325,38 @@
                 console.log('Permission error received:', errorData);
                 if (errorData.isPersistent) {
                     showPermissionToast(errorData);
+                }
+            });
+            
+            // Microphone access check is now handled in preload.js
+            
+            // Listen for microphone status updates
+            window.electron.onMicStatus && window.electron.onMicStatus((data) => {
+                console.log('[RENDERER] Microphone status update:', data);
+                
+                if (!data.granted && data.error) {
+                    // Show user-friendly error message
+                    let errorMessage = 'Microphone access denied';
+                    
+                    if (data.error.name === 'NotAllowedError') {
+                        if (navigator.platform.includes('Win')) {
+                            errorMessage = 'Microphone access is disabled in Windows settings. Please enable microphone access in Windows Privacy Settings.';
+                        } else {
+                            errorMessage = 'Microphone access denied. Please allow microphone access in your browser or system settings.';
+                        }
+                    } else if (data.error.name === 'NotFoundError') {
+                        errorMessage = 'No microphone device found. Please connect a microphone and try again.';
+                    }
+                    
+                    // Show error toast (reuse existing toast mechanism)
+                    const statusBar = document.getElementById('statusBar');
+                    if (statusBar) {
+                        statusBar.textContent = errorMessage;
+                        statusBar.classList.add('show');
+                        setTimeout(() => {
+                            statusBar.classList.remove('show');
+                        }, 8000);
+                    }
                 }
             });
         }
