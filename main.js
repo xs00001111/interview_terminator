@@ -1,10 +1,26 @@
-const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer, systemPreferences } = require('electron');
+// ---- load env from wherever it lives (asar or resources root) ----
+const fs = require('fs');
 const path = require('path');
+const dotenv = require('dotenv');
+const envCandidates = [
+  path.join(__dirname, '.env.production'),               // inside asar (mac build)
+  path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
+];
+for (const p of envCandidates) {
+  if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
+}
+
+const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer, systemPreferences, shell } = require('electron');
 const { BAR_HEIGHT, EXPANDED_HEIGHT, WINDOW_WIDTH } = require('./constants.js');
 const { fork } = require('child_process');
-const fs = require('fs');
 const os = require('os');
-const dotenv = require('dotenv');
+
+// Check if we're on macOS 15+ (Sequoia) where Swift AudioCapture handles both mic and system audio
+function isMac15Plus() {
+  if (process.platform !== 'darwin') return false;
+  // Darwin 24 == macOS 15 (Sequoia); Darwin 23 == macOS 14, etc.
+  return parseInt(os.release().split('.')[0], 10) >= 24;
+}
 
 // Load environment variables from .env file
 dotenv.config();
@@ -110,6 +126,10 @@ let windowStateManager;
 // Track window visibility state
 let isWindowVisible = true; // Default to true until we can load from state manager
 let sessionStartTime; // Variable to store the start time of the interview session
+
+// Microphone permission management
+let micPermissionCache = null;       // { ok:true } once granted
+let micCheckInFlight   = null;       // Promise while a check is running
 
 // Create temp directory for screenshots
 const screenshotDir = path.join(os.tmpdir(), 'app-screenshots');
@@ -310,7 +330,7 @@ async function captureScreenshotWindows() {
   const captureStartTime = Date.now();
   
   try {
-    console.log('[PERF] Starting Windows screenshot capture...');
+    logger.info('[PERF] Starting Windows screenshot capture...');
     
     // Get screen sources with optimized settings for faster enumeration
     const sourcesStartTime = Date.now();
@@ -320,7 +340,7 @@ async function captureScreenshotWindows() {
       fetchWindowIcons: false // Skip window icons for faster processing
     });
     const sourcesTime = Date.now() - sourcesStartTime;
-    console.log(`[PERF] Windows screen sources enumeration took: ${sourcesTime}ms`);
+    logger.info(`[PERF] Windows screen sources enumeration took: ${sourcesTime}ms`);
     
     if (sources.length === 0) {
       throw new Error('No screen sources found');
@@ -357,13 +377,13 @@ async function captureScreenshotWindows() {
       });
       
       const captureTime = Date.now() - captureStartTime2;
-      console.log(`[PERF] Windows screen capture took: ${captureTime}ms`);
+      logger.info(`[PERF] Windows screen capture took: ${captureTime}ms`);
       
       // Convert to PNG buffer with optimized compression
       const pngBuffer = screenshot.toPNG();
       
       const totalTime = Date.now() - captureStartTime;
-      console.log(`[PERF] Windows screenshot capture completed in ${totalTime}ms`);
+      logger.info(`[PERF] Windows screenshot capture completed in ${totalTime}ms`);
       
       return pngBuffer;
     } finally {
@@ -390,18 +410,68 @@ function hasScreenRecordingAccess() {
 }
 
 async function ensureMicrophoneAccess() {
-  if (process.platform !== 'darwin') return true;
-  
-  if (hasMicrophoneAccess()) return true;
-  
-  const asked = await systemPreferences.askForMediaAccess('microphone');
-  if (asked) return true;
-  
-  // Still denied -> tell renderer to show toast
-  if (mainWindow) {
-    mainWindow.webContents.send('permission-error', 'microphone');
+  if (process.platform === 'darwin') {
+    // macOS 15+: Swift AudioCapture handles microphone directly, no system permission check needed
+    const isMac15 = isMac15Plus();
+    logger.info(`[MIC] macOS version check: isMac15Plus=${isMac15}, platform=${process.platform}, release=${os.release()}`);
+    if (isMac15) {
+      logger.info('[MIC] Skipping system microphone permission check for macOS 15+');
+      return { ok: true, skipped: true };
+    }
+    
+    // macOS < 15: Use existing system permission checking
+    if (hasMicrophoneAccess()) return { ok: true };
+    
+    const asked = await systemPreferences.askForMediaAccess('microphone');
+    if (asked) return { ok: true };
+    
+    // Permission denied
+    if (mainWindow) {
+      mainWindow.webContents.send('permission-error', 'microphone');
+    }
+    return { ok: false };
+  } else {
+    // Windows/Linux: Use getUserMedia checking with proper request correlation
+    if (micPermissionCache?.ok) return { ok: true };      // ① cached
+    if (micCheckInFlight) return micCheckInFlight;        // ② reuse ongoing
+    
+    logger.info('[MIC] Checking microphone access via getUserMedia...');
+    
+    micCheckInFlight = new Promise((resolve) => {
+      const requestId = Date.now().toString(36);        // ③ correlate messages
+      
+      const micStatusHandler = (_e, data) => {
+        if (data.id !== requestId) return;              // ignore others
+        ipcMain.removeListener('mic-status', micStatusHandler);
+        clearTimeout(timer);
+        micCheckInFlight = null;
+        if (data.ok) micPermissionCache = { ok: true };  // ④ cache success
+        resolve({ ok: data.ok });
+      };
+      
+      ipcMain.on('mic-status', micStatusHandler);
+      
+      // Notify renderer process to perform permission check with request ID
+      if (mainWindow) {
+        mainWindow.webContents.send('check-microphone-access', { id: requestId });
+      } else {
+        // If no main window, resolve as false
+        ipcMain.removeListener('mic-status', micStatusHandler);
+        micCheckInFlight = null;
+        resolve({ ok: false });
+      }
+      
+      // Add a timeout to prevent hanging indefinitely
+      const timer = setTimeout(() => {
+        ipcMain.removeListener('mic-status', micStatusHandler);
+        micCheckInFlight = null;
+        logger.warn('[MIC] Microphone permission check timed out');
+        resolve({ ok: false, timeout: true });
+      }, 10000); // 10 second timeout
+    });
+    
+    return micCheckInFlight;
   }
-  return false;
 }
 
 async function ensureScreenRecordingAccess() {
@@ -446,11 +516,38 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: app.isPackaged 
-        ? path.join(process.resourcesPath, 'preload.js') 
-        : path.join(__dirname, 'preload.js'),
+      sandbox: false,
+      preload: (() => {
+        let preloadPath;
+        
+        if (app.isPackaged) {
+          // For packaged apps, preload.js is in asarUnpack, so it's in app.asar.unpacked
+          if (process.platform === 'darwin') {
+            // macOS: app.asar.unpacked is in Contents/Resources/
+            preloadPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'preload.js');
+          } else {
+            // Windows: app.asar.unpacked is in the app directory
+            preloadPath = path.join(path.dirname(process.execPath), 'resources', 'app.asar.unpacked', 'preload.js');
+          }
+        } else {
+          // Development mode
+          preloadPath = path.join(__dirname, 'preload.js');
+        }
+        
+        if (!fs.existsSync(preloadPath)) {
+          console.error('[FATAL] preload.js missing at', preloadPath);
+          console.error('[DEBUG] Checked paths:');
+          console.error('  - app.isPackaged:', app.isPackaged);
+          console.error('  - process.platform:', process.platform);
+          console.error('  - process.resourcesPath:', process.resourcesPath);
+          console.error('  - process.execPath:', process.execPath);
+          console.error('  - __dirname:', __dirname);
+          app.quit();
+        }
+        return preloadPath;
+      })(),
       backgroundThrottling: false, // Prevent throttling when in background
-      paintWhenInitiallyHidden: true // Ensure rendering happens even when hidden
+      paintWhenInitiallyHidden: true, // Ensure rendering happens even when hidden
     },
     show: true // Show window immediately instead of waiting for ready-to-show
   });
@@ -465,15 +562,23 @@ function createWindow() {
   mainWindow.setContentProtection(true);
 
   // Load index.html directly
-  mainWindow.loadURL('file://' + path.join(__dirname, 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
 
   // Open DevTools only in development mode
   // if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-  //   mainWindow.webContents.openDevTools();
-  // }
+  // 
+  //}
+
+  mainWindow.webContents.openDevTools();
 
   // Set up window state tracking
   windowStateManager.trackWindow(mainWindow);
+  
+  // Watch for preload failures
+  mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
+    logger.error('Preload failed:', preloadPath, error);
+  });
   
   // Handle window state after creation
   mainWindow.once('ready-to-show', () => {
@@ -730,6 +835,10 @@ function createWindow() {
         mainWindow.webContents.send('recording-status', { isRecording: false });
       }
 
+      // Clear microphone permission cache to force fresh check next time
+      micPermissionCache = null;
+      logger.debug('[MIC] Cleared permission cache on recording stop');
+
       // Record session end time
       const sessionEndTime = new Date();
       logger.info(`Session ended at: ${sessionEndTime.toISOString()}`);
@@ -790,21 +899,86 @@ function createWindow() {
   // Microphone capture handlers for older macOS versions
   ipcMain.on('start-microphone-capture', (event) => {
     if (serverProcess) {
-      logger.info('Received start-microphone-capture request from renderer');
+      logger.info('Forwarding start-microphone-capture to server process');
       serverProcess.send({ type: 'start-microphone-capture' });
     }
   });
 
   ipcMain.on('stop-microphone-capture', (event) => {
     if (serverProcess) {
-      logger.info('Received stop-microphone-capture request from renderer');
+      logger.info('Forwarding stop-microphone-capture to server process');
       serverProcess.send({ type: 'stop-microphone-capture' });
     }
   });
 
+  ipcMain.on('start-windows-audio-capture', (event) => {
+    logger.info('[WINDOWS-AUDIO] [DEBUG] received start start-windows-audio-capture');
+  if (serverProcess) {
+    logger.info('[WINDOWS-AUDIO] Received start-windows-audio-capture from renderer');
+    logger.info('[WINDOWS-AUDIO] Forwarding start-windows-audio-capture to server process');
+    serverProcess.send({ type: 'start-windows-audio-capture' });
+  } else {
+    logger.error('[WINDOWS-AUDIO] Cannot forward start-windows-audio-capture: server process not available');
+  }
+});
+
+ipcMain.on('stop-windows-audio-capture', (event) => {
+  if (serverProcess) {
+    logger.info('Forwarding stop-windows-audio-capture to server process');
+    serverProcess.send({ type: 'stop-windows-audio-capture' });
+  }
+});
+
   ipcMain.on('microphone-data', (event, audioData) => {
+    // Convert ArrayBuffer to Buffer for IPC transmission
+    const audioBuffer = Buffer.from(audioData);
+    logger.info(`🔍 [DEBUG] Main received microphone-data from renderer: ${audioBuffer.length} bytes`);
     if (serverProcess) {
-      serverProcess.send({ type: 'microphone-data', data: audioData });
+      logger.info(`🔍 [DEBUG] Main forwarding microphone-data to server`);
+      serverProcess.send({ type: 'microphone-data', data: audioBuffer });
+    } else {
+      logger.error(`⚠️ [DEBUG] Main cannot forward microphone-data - no serverProcess`);
+    }
+  });
+
+  ipcMain.on('system-audio-data', (event, audioData) => {
+    // Convert ArrayBuffer to Buffer for IPC transmission
+    const audioBuffer = Buffer.from(audioData);
+    logger.info(`🔍 [DEBUG] Main received system-audio-data from renderer: ${audioBuffer.length} bytes`);
+    if (serverProcess) {
+      logger.info(`🔍 [DEBUG] Main forwarding system-audio-data to server`);
+      serverProcess.send({ type: 'system-audio-data', data: audioBuffer });
+    } else {
+      logger.error(`⚠️ [DEBUG] Main cannot forward system-audio-data - no serverProcess`);
+    }
+  });
+
+  ipcMain.on('microphone-audio-meta', (event, metadata) => {
+    logger.info(`[WINDOWS-AUDIO] Microphone metadata:`, metadata);
+    if (serverProcess) {
+      serverProcess.send({ type: 'microphone-audio-meta', data: metadata });
+    }
+  });
+
+  ipcMain.on('system-audio-meta', (event, metadata) => {
+    logger.info(`[WINDOWS-AUDIO] System audio metadata:`, metadata);
+    if (serverProcess) {
+      serverProcess.send({ type: 'system-audio-meta', data: metadata });
+    }
+  });
+
+  ipcMain.on('windows-audio-capture-success', (event) => {
+    logger.info('[WINDOWS-AUDIO] Audio capture started successfully in renderer');
+  });
+
+  ipcMain.on('windows-audio-capture-error', (event, errorData) => {
+    logger.error('[WINDOWS-AUDIO] Audio capture failed in renderer:', errorData);
+  });
+
+  ipcMain.on('system-audio-missing', (event) => {
+    logger.warn('[WINDOWS-AUDIO] System audio stream missing - no system audio available');
+    if (serverProcess) {
+      serverProcess.send({ type: 'system-audio-missing' });
     }
   });
 
@@ -1014,7 +1188,7 @@ function createWindow() {
   
   // Handle elaboration request
   ipcMain.on('elaborate', (event, message) => {
-    console.log('[DEBUG] Main process received elaborate request:', message);
+    logger.info('[IPC] Main process received elaborate request:', message);
     if (serverProcess) {
       serverProcess.send({ type: 'elaborate', data: { message } });
     }
@@ -1022,12 +1196,12 @@ function createWindow() {
   
   // Handle get-suggestion request
   ipcMain.on('get-suggestion', (event, data) => {
-    console.log('[DEBUG] Main process received get-suggestion request:', data);
+    logger.info('[IPC] Main process received get-suggestion request:', data);
     if (serverProcess) {
-      console.log('[DEBUG] Forwarding get-suggestion request to server process');
+      logger.info('[IPC] Forwarding get-suggestion request to server process');
       serverProcess.send({ type: 'get-suggestion', data });
     } else {
-      console.error('[DEBUG] Cannot forward get-suggestion request: server process not available');
+      logger.error('[IPC] Cannot forward get-suggestion request: server process not available');
       if (mainWindow) {
         mainWindow.webContents.send('error', { message: 'Server process is not available. Please restart the application.' });
       }
@@ -1365,10 +1539,10 @@ ipcMain.on('delete-context', async (event) => {
     const { shell } = require('electron');
     shell.openExternal(url)
       .then(() => {
-        console.log(`Opened external URL: ${url}`);
+        logger.info(`External URL opened successfully: ${url}`);
       })
       .catch(err => {
-        console.error(`Error opening external URL: ${url}`, err);
+        logger.error(`Error opening external URL: ${url}`, err);
         if (mainWindow) {
           mainWindow.webContents.send('error', { message: `Failed to open URL: ${err.message}` });
         }
@@ -1497,7 +1671,7 @@ async function decrementInterviewCount(userId) {
     
     // Don't decrement if plan doesn't exist or has unlimited interviews (-1)
     if (!plan || plan.interviews_remaining === -1) {
-      console.log(`[Plan] Not decrementing interviews for user ${userId}: ${!plan ? 'no plan found' : 'unlimited plan'}`);
+      logger.info(`[Plan] Not decrementing interviews for user ${userId}: ${!plan ? 'no plan found' : 'unlimited plan'}`);
       return;
     }
     
@@ -1522,6 +1696,50 @@ let authService = null;
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
+  // Force-allow media permissions in Electron (bypasses Chrome UI)
+  const { session } = require('electron');
+  
+  // A. Grant new permission requests
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'media') {
+      logger.info('[PERMISSION] Granting media permission (microphone/camera)');
+      return callback(true);   // always grant mic/camera
+    }
+    callback(false);
+  });
+  
+  // B. Override Chromium's "remembered" deny from earlier runs (required for Electron 25+)
+  session.defaultSession.setPermissionCheckHandler((_webContents, _permission) => {
+    // Returning 'granted' skips the internal deny cache
+    return 'granted';
+  });
+  
+  // C. Set up audio loopback for system audio capture without Stereo Mix
+  logger.info('[AUDIO-LOOPBACK] Setting up display media request handler for audio loopback');
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    logger.info('[AUDIO-LOOPBACK] Display media request received');
+    
+    // Get available screen sources
+    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+      logger.info(`[AUDIO-LOOPBACK] Found ${sources.length} screen sources`);
+      
+      if (sources.length > 0) {
+        // Use the first screen source with audio loopback
+        logger.info('[AUDIO-LOOPBACK] Granting audio loopback access');
+        callback({
+          video: sources[0],
+          audio: 'loopback'  // This enables system audio capture at OS level
+        });
+      } else {
+        logger.warn('[AUDIO-LOOPBACK] No screen sources found');
+        callback({});
+      }
+    }).catch((error) => {
+      logger.error('[AUDIO-LOOPBACK] Error getting screen sources:', error);
+      callback({});
+    });
+  }, { useSystemPicker: false });
+  
   // Initialize window state manager after app is ready
   windowStateManager = new WindowStateManager({
     defaultWidth: 800,
@@ -1648,13 +1866,13 @@ app.whenReady().then(async () => {
   
   // Register the complete-login handler
   ipcMain.handle('complete-login', async (event, data) => {
-    console.log('[MAIN] Handling complete-login with data:', data);
+    logger.info('[AUTH] Handling complete-login request');
     try {
       const { email, password } = data;
       const success = await authService.signInWithEmailPassword(email, password);
       return { success };
     } catch (error) {
-      console.error('[MAIN] Error in complete-login handler:', error);
+      logger.error('[AUTH] Error in complete-login handler:', error);
       return { success: false, error: error.message };
     }
   });
@@ -1763,15 +1981,109 @@ ipcMain.handle('check-screen-permission', async () => {
   return await ensureScreenRecordingAccess();
 });
 
-ipcMain.on('open-privacy-settings', (event, permissionType) => {
-  const urls = {
-    microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
-    screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
-  };
-  
-  const url = urls[permissionType];
-  if (url) {
-    shell.openExternal(url);
+// Handle preload microphone check requests
+ipcMain.handle('preload-mic-check', async () => {
+  return await ensureMicrophoneAccess();
+});
+
+ipcMain.on('open-privacy-settings', async (event, platform) => {
+  if (platform === 'win32') {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      message: 'Windows is blocking microphone access',
+      detail: 'Click "Open settings" → enable "Microphone access" and "Let desktop apps access your microphone", then restart Interview Terminator.',
+      buttons: ['Open settings', 'Cancel'],
+      defaultId: 0
+    });
+    
+    if (response === 0) {
+      shell.openExternal('ms-settings:privacy-microphone');
+    }
+  } else if (platform === 'darwin') {
+    // macOS privacy settings
+    const urls = {
+      microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+      screen: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+    };
+    
+    const url = urls.microphone; // Default to microphone for this context
+    if (url) {
+      shell.openExternal(url);
+    }
+  }
+});
+
+// Handle microphone status from renderer process
+ipcMain.on('mic-status', async (event, data) => {
+  if (data.ok) {
+    logger.info('[MIC] getUserMedia permission granted');
+    // Notify renderer process that permission is granted
+    if (mainWindow) {
+      mainWindow.webContents.send('mic-status-update', { granted: true });
+    }
+  } else {
+    logger.error(`[MIC] getUserMedia failed: ${data.name} – ${data.message}`);
+    
+    // Provide detailed logging based on error type
+    if (data.name === 'NotAllowedError') {
+      logger.error('[MIC] Microphone access denied by user or system policy');
+    } else if (data.name === 'SecurityError') {
+      logger.error('[MIC] Security error - possibly HTTPS required or invalid context');
+    } else if (data.name === 'NotFoundError') {
+      logger.error('[MIC] No microphone device found');
+    }
+    
+    // Show Windows permission dialog for microphone access issues
+    if (process.platform === 'win32' && (data.name === 'NotAllowedError' || data.name === 'SecurityError')) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Microphone Access Blocked',
+        message: 'Windows is currently blocking microphone access for desktop apps.',
+        detail: 'Please enable "Let desktop apps access your microphone" in Settings › Privacy & security › Microphone, then retry.',
+        buttons: ['Open Settings', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1
+      });
+
+      
+      if (response === 0) {
+         // Open Windows microphone privacy settings
+         shell.openExternal('ms-settings:privacy-microphone');
+       }
+    }
+    
+    // Notify renderer process that permission was denied
+    if (mainWindow) {
+      mainWindow.webContents.send('mic-status-update', { 
+        granted: false, 
+        error: data 
+      });
+      
+      // Send permission error event (reuse existing permission error handling)
+      mainWindow.webContents.send('perm-error', {
+        type: 'microphone',
+        platform: process.platform,
+        error: data.name,
+        message: data.message,
+        isPersistent: true
+      });
+    }
+  }
+});
+
+// Handle Windows microphone permission denied
+ipcMain.on('mic-permission-denied', async () => {
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Microphone access is blocked',
+    message: 'Windows is currently blocking microphone access for this app.',
+    detail: 'Click "Open settings", enable "Microphone access" and ' +
+            '"Let desktop apps access your microphone", then restart.',
+    buttons: ['Open settings', 'Cancel'],
+    defaultId: 0
+  });
+  if (response === 0) {
+    shell.openExternal('ms-settings:privacy-microphone');   // deep-link
   }
 });
   
@@ -1895,252 +2207,67 @@ ipcMain.on('open-privacy-settings', (event, permissionType) => {
           // Re-attach all the event handlers
           setupServerProcessHandlers(serverProcess);
 
-  // Handle save-context message from server process
+  // Explicit forwarder system to avoid duplicates and make message handling clear
+  function forward(channel, data = null) {
+    if (mainWindow) {
+      mainWindow.webContents.send(channel, data);
+    }
+  }
+
+  const relay = {
+    'start-microphone-capture': () => forward('start-microphone-capture'),
+    'stop-microphone-capture': () => forward('stop-microphone-capture'),
+    'start-windows-audio-capture': () => {
+      logger.info('[WINDOWS-AUDIO] Server requested start-windows-audio-capture, forwarding to renderer');
+      forward('start-windows-audio-capture');
+    },
+    'stop-windows-audio-capture': () => {
+      logger.info('[WINDOWS-AUDIO] Server requested stop-windows-audio-capture, forwarding to renderer');
+      forward('stop-windows-audio-capture');
+    },
+    'recording-failed': (message) => {
+      logger.error('[MAIN] Recording failed:', message.reason);
+      if (mainWindow) {
+        mainWindow.webContents.send('recording-failed', { reason: message.reason });
+      }
+    }
+  };
+
+  // Single, consolidated message handler for server process
   serverProcess.on('message', async (message) => {
+    // Handle audio capture relay messages
+    logger.info('🔍 [DEBUG] Main received server message:', message?.type);
+    
+    // Special handling for test message
+    if (message.type === 'test-ipc-connection') {
+      logger.info(`✅ [DEBUG] IPC CONNECTION TEST SUCCESSFUL: ${message.data}`);
+      return;
+    }
+    
+    // Handle pong response from server
+    if (message.type === 'pong-from-server') {
+      const latency = Date.now() - message.originalTimestamp;
+      logger.info(`✅ [WINDOWS-DEBUG] RECEIVED PONG FROM SERVER - Latency: ${latency}ms`);
+      return;
+    }
+    
+    if (relay[message.type]) {
+      logger.info('🔍 [DEBUG] Found relay handler for:', message?.type);
+      relay[message.type](message);
+      return;
+    }
+    else {
+      logger.info(`🔍 [DEBUG] No relay handler for: ${message?.type}`);
+    }
+
+    // Handle persistent errors
     if (message.type === 'error' && message.data.isPersistent) {
       if (mainWindow) {
         mainWindow.webContents.send('perm-error', message.data);
       }
-    } else if (message.type === 'save-context' && message.data) {
-      try {
-        // Get the user ID from the auth service
-        const userId = authService?.getSession()?.user?.id;
-
-        if (!userId) {
-          logger.warn('User ID not available, cannot save context');
-          return;
-        }
-
-        // Initialize Supabase client
-        const supabase = createSupabaseClient();
-
-        // Prepare context data for insertion
-        const contextData = {
-          user_id: userId,
-          type: message.data.type,
-          title: message.data.title,
-          content: message.data.content,
-          metadata: message.data.metadata || {}
-        };
-
-        logger.info(`Saving ${message.data.type} context to database: ${message.data.title}`);
-
-        // Insert context into the user_contexts table
-        const { data, error } = await supabase
-          .from('user_contexts')
-          .insert([contextData]);
-
-        if (error) {
-          logger.error('Error saving context to database:', error);
-          if (mainWindow) {
-            mainWindow.webContents.send('error', {
-              message: `Error saving context: ${error.message}`
-            });
-          }
-        } else {
-          logger.info('Context saved successfully to database');
-          if (mainWindow) {
-            mainWindow.webContents.send('context-saved', {
-              success: true,
-              message: 'Context saved successfully'
-            });
-          }
-        }
-      } catch (error) {
-        logger.error('Unexpected error saving context:', error);
-        if (mainWindow) {
-          mainWindow.webContents.send('error', {
-            message: `Unexpected error saving context: ${error.message}`
-          });
-        }
-      }
+      return;
     }
 
-    // Handle get-user-context message to retrieve context data from database
-    if (message.type === 'get-user-context' && message.data && message.data.userId) {
-      try {
-
-        
-        // Initialize Supabase client
-        const supabase = createSupabaseClient();
-        
-        // Query the user_contexts table for the most recent context
-        const { data, error } = await supabase
-          .from('user_contexts')
-          .select('*')
-          .eq('user_id', message.data.userId)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        
-        if (error) {
-          logger.error('[MAIN] Error retrieving user context from Supabase:', error.message);
-          serverProcess.send({
-            type: 'user-context-response',
-            data: null
-          });
-        } else if (data && data.length > 0) {
-
-          serverProcess.send({
-            type: 'user-context-response',
-            data: data[0]
-          });
-        } else {
-
-          serverProcess.send({
-            type: 'user-context-response',
-            data: null
-          });
-        }
-      } catch (error) {
-        logger.error('[MAIN] Unexpected error retrieving user context:', error);
-        serverProcess.send({
-          type: 'user-context-response',
-          data: null
-        });
-      }
-    }
-    
-    // Forward messages to the renderer process
-    if (mainWindow) {
-      if (message.type === 'transcript') {
-        mainWindow.webContents.send('transcript', message.data);
-      } else if (message.type === 'interim-transcript') {
-        mainWindow.webContents.send('interim-transcript', message.data);
-      } else if (message.type === 'suggestion') {
-        mainWindow.webContents.send('suggestion', message.data);
-      } else if (message.type === 'error') {
-        logger.error('Server error:', message.data.message);
-        mainWindow.webContents.send('error', message.data);
-      } else if (message.type === 'ready') {
-        mainWindow.webContents.send('server-ready', message.data);
-      } else if (message.type === 'recording-status') {
-        mainWindow.webContents.send('recording-status', message.data);
-      } else if (message.type === 'context-update') {
-        mainWindow.webContents.send('context-update', message.data);
-      } else if (message.type === 'elaboration') {
-        mainWindow.webContents.send('elaboration', message.data);
-      } else if (message.type === 'start-microphone-capture') {
-        // Forward microphone capture start request to renderer
-        mainWindow.webContents.send('start-microphone-capture');
-      } else if (message.type === 'stop-microphone-capture') {
-        // Forward microphone capture stop request to renderer
-        mainWindow.webContents.send('stop-microphone-capture');
-      }
-    }
-  });
-          
-          // Notify the renderer that we're reconnecting
-          if (mainWindow) {
-            mainWindow.webContents.send('server-reconnecting');
-          }
-        }, 1000);
-      }
-    });
-    
-    // Handle messages from the server process
-    process.on('message', async (message) => {
-      if (message.type === 'check-plan-status-request') {
-        // Handle plan status check request from server
-        const userId = message.data?.userId || authService?.getSession()?.user?.id;
-        
-        if (!userId) {
-          if (mainWindow) {
-            mainWindow.webContents.send('error', { message: 'User ID is required to check plan status' });
-          }
-          return;
-        }
-        
-        try {
-          const planStatus = await getPlanStatus(userId);
-          
-          // Send plan status back to the renderer
-          if (mainWindow) {
-            mainWindow.webContents.send('plan-status', {
-              canStart: planStatus.canStart,
-              reason: planStatus.reason,
-              plan: planStatus.plan
-            });
-          }
-        } catch (error) {
-          logger.error('Error checking plan status:', error);
-          if (mainWindow) {
-            mainWindow.webContents.send('error', { message: 'Failed to check plan status' });
-          }
-        }
-      } else if (message.type === 'suggestion' && mainWindow) {
-        mainWindow.webContents.send('suggestion', message.data);
-      } else if (message.type === 'suggestion-chunk' && mainWindow) {
-        // Handle streaming chunks from OpenAI
-        mainWindow.webContents.send('suggestion-chunk', message.data);
-      } else if (message.type === 'suggestion-partial' && mainWindow) {
-        // Handle streaming chunks from Gemini (screenshot analysis)
-        mainWindow.webContents.send('suggestion-chunk', message.data);
-      } else if (message.type === 'recording-status' && mainWindow) {
-        mainWindow.webContents.send('recording-status', message.data);
-      } else if (message.type === 'context-update' && mainWindow) {
-        mainWindow.webContents.send('context-update', message.data);
-      } else if (message.type === 'error' && mainWindow) {
-        mainWindow.webContents.send('error', message.data);
-      } else if (message.type === 'ready' && mainWindow) {
-        mainWindow.webContents.send('ready', message.data);
-      } else if (message.type === 'screenshot-processed' && mainWindow) {
-        mainWindow.webContents.send('screenshot-processed', message.data);
-      } else if (message.type === 'processing-screenshot' && mainWindow) {
-        mainWindow.webContents.send('processing-screenshot', message.data);
-      } else if (message.type === 'elaboration' && mainWindow) {
-        mainWindow.webContents.send('elaboration', message.data);
-      } else if (message.type === 'time-limit-reached' && mainWindow) {
-        logger.warn(`Time limit reached: ${message.data.message}`);
-        mainWindow.webContents.send('time-limit-reached', message.data);
-      } else if (message.type === 'interview-session-saved' && mainWindow) {
-        // When an interview session is saved, update the plan status
-        const userId = message.data?.userId || authService?.getSession()?.user?.id;
-        
-        if (userId) {
-          try {
-            // Get updated plan status
-            const planStatus = await getPlanStatus(userId);
-            
-            // Send updated plan status to the renderer
-            mainWindow.webContents.send('plan-status-update', {
-              plan: planStatus.plan
-            });
-          } catch (error) {
-            logger.error('Error updating plan status after interview session:', error);
-          }
-        }
-      } else if (message.type === 'pong') {
-        logger.debug('Received pong from server process - server is alive');
-      }
-    });
-    
-    // Log server output
-    process.stdout.on('data', (data) => {
-      logger.info(`[Server]: ${data}`);
-    });
-    
-    process.stderr.on('data', (data) => {
-      logger.error(`[Server Error]: ${data}`);
-    });
-  }
-  
-  // Start the server process
-  const serverPath = app.isPackaged 
-    ? path.join(process.resourcesPath, 'server.js')
-    : path.join(__dirname, 'server.js');
-
-  logger.info(`Starting server process from: ${serverPath}`);
-  
-  // Fork the server process with environment variables
-  serverProcess = fork(serverPath, [], {
-    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-  });
-  
-  // Set up all the event handlers
-  setupServerProcessHandlers(serverProcess);
-
-  // Handle save-context message from server process
-  serverProcess.on('message', async (message) => {
     // Handle save-context message to save context data to database
     if (message.type === 'save-context' && message.data) {
       try {
@@ -2195,13 +2322,12 @@ ipcMain.on('open-privacy-settings', (event, permissionType) => {
           });
         }
       }
+      return;
     }
 
     // Handle get-user-context message to retrieve context data from database
     if (message.type === 'get-user-context' && message.data && message.data.userId) {
       try {
-
-        
         // Initialize Supabase client
         const supabase = createSupabaseClient();
         
@@ -2220,13 +2346,11 @@ ipcMain.on('open-privacy-settings', (event, permissionType) => {
             data: null
           });
         } else if (data && data.length > 0) {
-
           serverProcess.send({
             type: 'user-context-response',
             data: data[0]
           });
         } else {
-
           serverProcess.send({
             type: 'user-context-response',
             data: null
@@ -2239,30 +2363,155 @@ ipcMain.on('open-privacy-settings', (event, permissionType) => {
           data: null
         });
       }
+      return;
     }
     
-    // Forward messages to the renderer process
+    // Handle plan status check request from server
+    if (message.type === 'check-plan-status-request') {
+      const userId = message.data?.userId || authService?.getSession()?.user?.id;
+      
+      if (!userId) {
+        if (mainWindow) {
+          mainWindow.webContents.send('error', { message: 'User ID is required to check plan status' });
+        }
+        return;
+      }
+      
+      try {
+        const planStatus = await getPlanStatus(userId);
+        
+        // Send plan status back to the renderer
+        if (mainWindow) {
+          mainWindow.webContents.send('plan-status', {
+            canStart: planStatus.canStart,
+            reason: planStatus.reason,
+            plan: planStatus.plan
+          });
+        }
+      } catch (error) {
+        logger.error('Error checking plan status:', error);
+        if (mainWindow) {
+          mainWindow.webContents.send('error', { message: 'Failed to check plan status' });
+        }
+      }
+      return;
+    }
+
+    // Handle time limit reached
+    if (message.type === 'time-limit-reached' && mainWindow) {
+      logger.warn(`Time limit reached: ${message.data.message}`);
+      mainWindow.webContents.send('time-limit-reached', message.data);
+      return;
+    }
+
+    // Handle interview session saved
+    if (message.type === 'interview-session-saved' && mainWindow) {
+      const userId = message.data?.userId || authService?.getSession()?.user?.id;
+      
+      if (userId) {
+        try {
+          // Get updated plan status
+          const planStatus = await getPlanStatus(userId);
+          
+          // Send updated plan status to the renderer
+          mainWindow.webContents.send('plan-status-update', {
+            plan: planStatus.plan
+          });
+        } catch (error) {
+          logger.error('Error updating plan status after interview session:', error);
+        }
+      }
+      return;
+    }
+
+    // Handle pong response
+    if (message.type === 'pong') {
+      logger.debug('Received pong from server process - server is alive');
+      return;
+    }
+
+    // Forward all other messages to the renderer process
     if (mainWindow) {
-      if (message.type === 'transcript') {
-        mainWindow.webContents.send('transcript', message.data);
-      } else if (message.type === 'interim-transcript') {
-        mainWindow.webContents.send('interim-transcript', message.data);
-      } else if (message.type === 'suggestion') {
-        mainWindow.webContents.send('suggestion', message.data);
-      } else if (message.type === 'error') {
-        logger.error('Server error:', message.data.message);
-        mainWindow.webContents.send('error', message.data);
-      } else if (message.type === 'ready') {
-        mainWindow.webContents.send('server-ready', message.data);
-      } else if (message.type === 'recording-status') {
-        mainWindow.webContents.send('recording-status', message.data);
-      } else if (message.type === 'context-update') {
-        mainWindow.webContents.send('context-update', message.data);
-      } else if (message.type === 'elaboration') {
-        mainWindow.webContents.send('elaboration', message.data);
+      const forwardableMessages = [
+        'transcript', 'interim-transcript', 'suggestion', 'suggestion-chunk', 
+        'suggestion-partial', 'error', 'ready', 'recording-status', 
+        'context-update', 'elaboration', 'screenshot-processed', 'processing-screenshot'
+      ];
+      
+      if (forwardableMessages.includes(message.type)) {
+        if (message.type === 'error') {
+          logger.error('Server error:', message.data.message);
+        }
+        mainWindow.webContents.send(message.type, message.data);
       }
     }
   });
+          
+          // Notify the renderer that we're reconnecting
+          if (mainWindow) {
+            mainWindow.webContents.send('server-reconnecting');
+          }
+        }, 1000);
+      }
+    });
+
+    
+    // Log server output
+    process.stdout.on('data', (data) => {
+      logger.info(`[Server]: ${data}`);
+    });
+    
+    process.stderr.on('data', (data) => {
+      logger.error(`[Server Error]: ${data}`);
+    });
+  }
+  
+  // Start the server process
+  const serverPath = app.isPackaged 
+    ? (() => {
+        if (process.platform === 'darwin') {
+          // macOS: server.js is in extraResources
+          return path.join(process.resourcesPath, 'server.js');
+        } else {
+          // Windows: server.js is in extraResources
+          return path.join(path.dirname(process.execPath), 'resources', 'server.js');
+        }
+      })()
+    : path.join(__dirname, 'server.js');
+
+  logger.info(`Starting server process from: ${serverPath}`);
+  
+  // Fork the server process with environment variables
+  serverProcess = fork(serverPath, [], {
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+  });
+  
+  // Set up all the event handlers
+  setupServerProcessHandlers(serverProcess);
+
+  // Windows-specific debugging
+  logger.info(`🔍 [WINDOWS-DEBUG] Server process created:`);
+  logger.info(`  - PID: ${serverProcess.pid}`);
+  logger.info(`  - Connected: ${serverProcess.connected}`);
+  logger.info(`  - Killed: ${serverProcess.killed}`);
+  logger.info(`  - Platform: ${process.platform}`);
+  logger.info(`  - Node version: ${process.version}`);
+  logger.info(`  - Electron version: ${process.versions.electron}`);
+  
+  // Test immediate IPC right after process creation
+  setTimeout(() => {
+    logger.info('🔍 [WINDOWS-DEBUG] Testing immediate IPC after 1 second...');
+    if (serverProcess && serverProcess.connected) {
+      try {
+        serverProcess.send({ type: 'ping-from-main', timestamp: Date.now() });
+        logger.info('🔍 [WINDOWS-DEBUG] Ping message sent to server');
+      } catch (error) {
+        logger.error('🔍 [WINDOWS-DEBUG] Failed to send ping:', error);
+      }
+    } else {
+      logger.error('🔍 [WINDOWS-DEBUG] Cannot ping - server not connected');
+    }
+  }, 1000);
   
   // Log when server is ready
   logger.info('Server process setup complete, waiting for ready signal...');
