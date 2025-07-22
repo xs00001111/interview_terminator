@@ -40,3 +40,6 @@ node_modules/
 .vscode/
 *.swp
 *.swo
+
+# Supabase config with sensitive keys
+utils/supabase.js
