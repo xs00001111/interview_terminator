@@ -1,6 +1,8 @@
-# Realtime Conversation Helper
+# Interview Terminator
 
-A real-time speech transcription application that uses Google Speech-to-Text API for transcription and Google Gemini AI for generating contextual suggestions and AI chat capabilities based on the transcribed speech.
+[Visit Interview Terminator](https://interm.ai/)
+
+Interview Terminator is a real-time speech transcription application that uses Google Speech-to-Text API for transcription and Google Gemini AI for generating contextual suggestions and AI chat capabilities based on the transcribed speech.
 
 ## Features
 
