@@ -303,17 +303,35 @@
             color: var(--text-primary-dark);
         }
 
-        .action-btn svg {
-            width: 17px; /* Standardized icon size */
-            height: 17px;
-            fill: currentColor;
+        /*──────── screenshot button look ────────*/
+        .screenshot-btn{
+            background: #28ca42;       /* same green as your traffic-light dot */
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 14px;
+        }
+        .screenshot-btn:hover{
+            background: #1aad34;
+        }
+
+        /* keep camera hollow */
+        .screenshot-btn svg{
+            fill: none !important;
+        }
+
+        /* give every shape inside the SVG a white outline */
+        .screenshot-btn svg *{
+            stroke: white !important;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
         }
 
         .ai-btn {
             background-color: var(--accent-apple-blue);
             color: var(--accent-foreground-dark);
-            min-width: 150px; /* Increased width for AI Answer button */
-            padding: 6px 12px !important; /* Adjusted padding */
+            min-width: 120px; /* Reduced width for AI Answer button */
+            padding: 6px 8px !important; /* Reduced padding */
             height: 30px !important; /* Fixed height for consistency */
             display: flex;
             flex-direction: row;
@@ -343,8 +361,8 @@
         .listen-now-btn {
             background-color: rgba(120, 120, 128, 0.5); /* Lighter, more opaque background */
             color: var(--text-primary-dark);
-            padding: 6px 12px !important; /* Keep vertical padding, min-width will handle width */
-            min-width: 220px; /* Significantly wider */
+            padding: 6px 8px !important; /* Reduced padding */
+            min-width: 140px; /* Reduced width */
             height: 30px !important;
             border-radius: 5px; /* More rectangular */
             border: 1px solid rgba(255, 255, 255, 0.2); /* Add subtle border for button definition */
@@ -1537,7 +1555,7 @@
                 <path d="M6,10 Q12,18 18,10" stroke="#f7e379" stroke-width="2" fill="none" />
             </svg>
             <button class="action-btn listen-now-btn" id="recordBtn" title="Start/Stop Recording">
-                  <svg viewBox="0 0 24 24">
+                  <svg viewBox="0 0 24 24" width="17" height="17">
                       <g class="soundwave-bars">
                           <rect class="bar" x="9" y="8" width="2" height="8" rx="1"/>
                           <rect class="bar" x="12" y="6" width="2" height="12" rx="1"/>
@@ -1550,6 +1568,14 @@
             
             <button class="action-btn ai-btn" id="aiBtn" title="AI Answer (⌘↵)">
                 <span>Answer <span class="hotkey-hint">(⌘↵)</span></span>
+            </button>
+            
+            <button class="screenshot-btn" id="screenshotBtn" title="Screenshot" data-tooltip="Screenshot">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                    <circle cx="12" cy="13" r="3"/>
+                </svg>
+                <span class="hotkey-hint">(⌘⇧↵)</span>
             </button>
             
 
@@ -2027,6 +2053,11 @@
                 isRecording = true;
                 recordBtn.classList.add('loading');
                 
+                // Disable screenshot button while recording
+                screenshotBtn.disabled = true;
+                screenshotBtn.style.opacity = '0.5';
+                screenshotBtn.style.cursor = 'not-allowed';
+                
                 // Update button text
                 const listenText = recordBtn.querySelector('.listen-text');
                 const hotkeyHint = recordBtn.querySelector('.hotkey-hint').outerHTML;
@@ -2036,6 +2067,11 @@
                 window.electron.stopRecording();
                 isRecording = false;
                 recordBtn.classList.remove('active', 'loading');
+                
+                // Re-enable screenshot button when recording stops
+                screenshotBtn.disabled = false;
+                screenshotBtn.style.opacity = '1';
+                screenshotBtn.style.cursor = 'pointer';
                 
                 // Update button text
                 const listenText = recordBtn.querySelector('.listen-text');
@@ -2059,10 +2095,12 @@
 
             // Get the latest transcript text for AI suggestion
             let transcriptText = '';
-            if (transcriptMessages.length > 0) {
+            if (transcriptMessages && transcriptMessages.length > 0) {
                 // Get the last few messages for context (up to 3 messages)
-                const recentMessages = Array.from(transcriptMessages).slice(-3);
-                transcriptText = recentMessages.map(msg => msg.textContent).join(' ');
+                // Ensure transcriptMessages is iterable before using Array.from
+                const recentMessages = transcriptMessages.length > 0 ? 
+                    Array.from(transcriptMessages).slice(-3) : [];
+                transcriptText = recentMessages.map(msg => msg.textContent || '').join(' ');
             }
             
             // If no transcript available, use a default prompt
@@ -2097,6 +2135,27 @@
             }
         });
 
+        // Screenshot button functionality
+        const screenshotBtn = document.getElementById('screenshotBtn');
+        screenshotBtn.addEventListener('click', () => {
+            // Don't allow screenshot when button is disabled (during recording)
+            if (screenshotBtn.disabled) {
+                return;
+            }
+            
+            // Close expanded menu if open
+            const wasExpandedVisible = expandedMenu.classList.contains('show');
+            expandedMenu.classList.remove('show');
+            expandBtn.classList.remove('active');
+            
+            // Update popup manager for expanded menu close
+            if (wasExpandedVisible && window.PopupManager) {
+                window.PopupManager.onPopupHide();
+            }
+            
+            // Trigger screenshot capture
+            window.electron.takeScreenshot();
+        });
 
         
         // Expand menu functionality
@@ -2923,7 +2982,8 @@
         
         // Listen for transcript events from backend
         if (window.electron && window.electron.onTranscript) {
-            window.electron.onTranscript((data) => {              
+            window.electron.onTranscript((data) => {
+                console.log('🎯 [FRONTEND] Received transcript event:', data);              
                 // Remove placeholder if it exists
                 const placeholder = document.getElementById('transcript-placeholder');
                 if (placeholder) {
@@ -2955,6 +3015,7 @@
         // Listen for interim transcript events from backend
         if (window.electron && window.electron.onInterimTranscript) {
             window.electron.onInterimTranscript((data) => {
+                console.log('🎯 [FRONTEND] Received interim transcript event:', data);
                 
                 // Remove placeholder if it exists
                 const placeholder = document.getElementById('transcript-placeholder');
@@ -3187,6 +3248,14 @@
                 if (isRecording && (data.type === 'plan-limit' || data.message?.includes('User ID is required'))) {
                     isRecording = false;
                     recordBtn.classList.remove('active', 'loading');
+                    
+                    // Re-enable screenshot button when recording fails
+                    const screenshotBtn = document.getElementById('screenshotBtn');
+                    if (screenshotBtn) {
+                        screenshotBtn.disabled = false;
+                        screenshotBtn.style.opacity = '1';
+                        screenshotBtn.style.cursor = 'pointer';
+                    }
                     
                     // Reset button text to original state
                     const listenText = recordBtn.querySelector('.listen-text');

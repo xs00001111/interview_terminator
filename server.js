@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 const envCandidates = [
+  path.join(__dirname, '.env'),                          // development .env file
   path.join(__dirname, '.env.production'),               // inside asar (mac build)
-  path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
+  ...(process.resourcesPath ? [path.join(process.resourcesPath, '.env.production')] : []), // alongside resources (win build) - only if resourcesPath exists
 ];
 for (const p of envCandidates) {
   if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
@@ -814,37 +815,37 @@ process.on('message', async (message) => { // Make handler async
     process.send({ type: 'stop-windows-audio-capture' });
   } else if (message.type === 'microphone-data') {
     // Handle microphone audio data from renderer
-    console.log(`🔍 [DEBUG] Server received microphone-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
+    // console.log(`🔍 [DEBUG] Server received microphone-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
     if (message.data && microphoneAudioInputStreamTransform) {
       // Ensure data is a Buffer for stream writing
       const audioBuffer = Buffer.isBuffer(message.data) ? message.data : Buffer.from(message.data);
-      console.log(`🔍 [DEBUG] Writing microphone data to stream: ${audioBuffer.length} bytes`);
+      // console.log(`🔍 [DEBUG] Writing microphone data to stream: ${audioBuffer.length} bytes`);
       microphoneAudioInputStreamTransform.write(audioBuffer);
     } else {
-      console.log(`⚠️ [DEBUG] Microphone data dropped - data: ${!!message.data}, stream: ${!!microphoneAudioInputStreamTransform}`);
+      // console.log(`⚠️ [DEBUG] Microphone data dropped - data: ${!!message.data}, stream: ${!!microphoneAudioInputStreamTransform}`);
     }
   } else if (message.type === 'system-audio-data') {
     // Handle system audio data from renderer (Windows Web API capture)
-    console.log(`🔍 [DEBUG] Server received system-audio-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
+    // console.log(`🔍 [DEBUG] Server received system-audio-data message: ${message.data ? message.data.length || 'unknown size' : 'no data'} bytes`);
     if (message.data && systemAudioInputStreamTransform) {
       // Ensure data is a Buffer for stream writing
       const audioBuffer = Buffer.isBuffer(message.data) ? message.data : Buffer.from(message.data);
-      console.log(`🔍 [DEBUG] Writing system audio data to stream: ${audioBuffer.length} bytes`);
+      // console.log(`🔍 [DEBUG] Writing system audio data to stream: ${audioBuffer.length} bytes`);
       systemAudioInputStreamTransform.write(audioBuffer);
     } else {
-      console.log(`⚠️ [DEBUG] System audio data dropped - data: ${!!message.data}, stream: ${!!systemAudioInputStreamTransform}`);
+      // console.log(`⚠️ [DEBUG] System audio data dropped - data: ${!!message.data}, stream: ${!!systemAudioInputStreamTransform}`);
     }
   } else if (message.type === 'microphone-audio-meta') {
     // Handle microphone audio metadata (sample rate, etc.)
     if (message.data && message.data.rate) {
-      console.log(`🎵 Microphone sample rate: ${message.data.rate}Hz`);
+      // console.log(`🎵 Microphone sample rate: ${message.data.rate}Hz`);
       // Update speech config if needed for different sample rates
       // Google Speech API supports 8kHz, 16kHz, 44.1kHz, 48kHz
     }
   } else if (message.type === 'system-audio-meta') {
     // Handle system audio metadata (sample rate, etc.)
     if (message.data && message.data.rate) {
-      console.log(`🎵 System audio sample rate: ${message.data.rate}Hz`);
+      // console.log(`🎵 System audio sample rate: ${message.data.rate}Hz`);
       // Update speech config if needed for different sample rates
       // Google Speech API supports 8kHz, 16kHz, 44.1kHz, 48kHz
     }
@@ -1698,6 +1699,14 @@ function startSystemAudioStream() {
 }
 
 const microphoneSpeechCallback = (stream) => {
+  console.log(`🎯 [SERVER-DEBUG] Microphone speech callback triggered`);
+  
+  // Check if stream has results before processing
+  if (!stream.results || !stream.results[0]) {
+    console.log(`🎯 [SERVER-DEBUG] Microphone callback: No results in stream`);
+    return;
+  }
+  
   // console.log('[DEBUG] Microphone audio speech callback called with stream:', JSON.stringify(stream, null, 2));
   // Convert API result end time from seconds + nanoseconds to milliseconds
   microphoneResultEndTime =
@@ -1734,7 +1743,7 @@ const microphoneSpeechCallback = (stream) => {
     // DEBUG: Print transcript data
     // console.log(`🎤 [MICROPHONE TRANSCRIPT] Length: ${transcript.length}, Content: "${transcript}", isFinal: ${stream.results[0].isFinal}`);
     
-    // Extract speaker diarization information if available (for SoX fallback version)
+    // Extract speaker diarization information if available
     if (stream.results[0].alternatives[0].words && 
         stream.results[0].alternatives[0].words.length > 0 && 
         stream.results[0].alternatives[0].words[0].speakerTag !== undefined) {
@@ -1817,6 +1826,7 @@ const microphoneSpeechCallback = (stream) => {
       }
       
       // Send interim transcript for immediate display
+      console.log(`🎯 [SERVER→MAIN] Sending interim transcript:`, { text: transcript, source: 'microphone' });
       process.send({ 
         type: 'interim-transcript', 
         data: { 
@@ -1861,6 +1871,7 @@ const microphoneSpeechCallback = (stream) => {
     }
     
     // Send transcript to the Electron frontend via IPC
+    console.log(`🎯 [SERVER→MAIN] Sending final transcript:`, { text: userMessage, source: 'microphone' });
     process.send({ 
       type: 'transcript', 
       data: { 
@@ -1896,6 +1907,14 @@ const microphoneSpeechCallback = (stream) => {
 };
 
 const systemAudioSpeechCallback = stream => {
+  console.log(`🎯 [SERVER-DEBUG] System audio speech callback triggered`);
+  
+  // Check if stream has results before processing
+  if (!stream.results || !stream.results[0]) {
+    console.log(`🎯 [SERVER-DEBUG] System audio callback: No results in stream`);
+    return;
+  }
+  
   // console.log(`[DEBUG] System audio speech callback called with stream:`, JSON.stringify(stream, null, 2));
   
   // Check if stream has results before processing
@@ -1941,6 +1960,7 @@ const systemAudioSpeechCallback = stream => {
     // Process interim results immediately (not just final ones)
     if (!stream.results[0].isFinal) {
       // Send interim transcript for immediate display
+      console.log(`🎯 [SERVER→MAIN] Sending system audio interim transcript:`, { text: transcript, source: 'systemAudio' });
       process.send({ 
         type: 'interim-transcript', 
         data: { text: transcript, interim: true, source: 'systemAudio' }
@@ -1954,6 +1974,7 @@ const systemAudioSpeechCallback = stream => {
     
     // Send transcript to the Electron frontend via IPC for system audio (interviewer)
     // This will go to the interview question box
+    console.log(`🎯 [SERVER→MAIN] Sending system audio final transcript:`, { text: userMessage, source: 'systemAudio' });
     process.send({ 
       type: 'transcript', 
       data: { 
@@ -2067,11 +2088,11 @@ const dualStreamManager = new DualStreamManager();
 // Separate audio input transforms for microphone and system audio
 const microphoneAudioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
-    console.log(`🔍 [DEBUG] Microphone audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
+    // console.log(`🔍 [DEBUG] Microphone audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
     
     // Only process chunks if we're actively recording
     if (!isRecording) {
-      console.log(`⚠️ [DEBUG] Dropping microphone chunk because isRecording=${isRecording}`);
+      // console.log(`⚠️ [DEBUG] Dropping microphone chunk because isRecording=${isRecording}`);
       next();
       return;
     }
@@ -2215,11 +2236,11 @@ let systemAudioBufferStartTime = null; // Track when system audio buffer started
 
 const systemAudioInputStreamTransform = new Writable({
   write(chunk, encoding, next) {
-    console.log(`🔍 [DEBUG] System audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
+    // console.log(`🔍 [DEBUG] System audio data received - isRecording: ${isRecording}, chunk size: ${chunk?.length || 'unknown'}`);
     
     // Only process chunks if we're actively recording
     if (!isRecording) {
-      console.log(`⚠️ [DEBUG] Dropping system audio chunk because isRecording=${isRecording}`);
+      // console.log(`⚠️ [DEBUG] Dropping system audio chunk because isRecording=${isRecording}`);
       next();
       return;
     }
@@ -2366,7 +2387,7 @@ function restartStream() {
   restartMicrophoneStream();
   
   // Only restart system audio stream if using Swift audio capture (dual stream)
-  // SoX provides a mixed stream (mic + system audio) that goes through the microphone pipeline
+  // Legacy comment: Previously SoX provided mixed streams, now using Swift/Windows native capture
   if (useSwiftAudioCapture && swiftAudioCaptureSupported) {
     restartSystemAudioStream();
   }
@@ -3566,7 +3587,6 @@ async function preInitializeAudioCapture() {
         useSwiftAudioCapture = true; // Fallback if permission check itself fails
       }
     } else {
-      // console.log('⚠️ Swift audio capture tool not found, will use SoX fallback');
       useSwiftAudioCapture = true;
     }
   } catch (error) {
