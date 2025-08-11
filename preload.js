@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('electron', {
   onInterimTranscript: (callback) => ipcRenderer.on('interim-transcript', (_, data) => callback(data)),
   onSuggestion: (callback) => ipcRenderer.on('suggestion', (_, data) => callback(data)),
   onSuggestionChunk: (callback) => ipcRenderer.on('suggestion-chunk', (_, data) => callback(data)),
+  onSuggestionPartial: (callback) => ipcRenderer.on('suggestion-partial', (_, data) => callback(data)),
   onSuggestionProcessing: (callback) => ipcRenderer.on('suggestion-processing', (_, data) => callback(data)),
   onRecordingStatus: (callback) => ipcRenderer.on('recording-status', (_, data) => callback(data)),
   onContextUpdate: (callback) => ipcRenderer.on('context-update', (_, data) => callback(data)),
@@ -172,6 +173,7 @@ contextBridge.exposeInMainWorld('electron', {
   
   // New functionality
   takeScreenshot: () => ipcRenderer.send('take-screenshot'),
+  takeScreenshotWithAI: () => ipcRenderer.send('take-screenshot-with-ai'),
   saveContext: (context) => ipcRenderer.send('save-context', context),
   loadContext: () => ipcRenderer.invoke('load-context'),
   getContext: () => ipcRenderer.invoke('get-context'),
@@ -225,9 +227,21 @@ contextBridge.exposeInMainWorld('electron', {
   onTriggerCopyAiText: (callback) => ipcRenderer.on('trigger-copy-ai-text', () => callback()),
   
   // Generic send and on methods for flexibility
-  send: (channel, ...args) => ipcRenderer.send(channel, ...args),
-  on: (channel, callback) => ipcRenderer.on(channel, (_, ...args) => callback(...args)),
-  invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+  send: (channel, ...args) => {
+    // Ensure args is always an array to prevent Symbol.iterator errors
+    const safeArgs = Array.isArray(args) ? args : (args ? [args] : []);
+    return ipcRenderer.send(channel, ...safeArgs);
+  },
+  on: (channel, callback) => ipcRenderer.on(channel, (_, ...args) => {
+    // Ensure args is always an array to prevent Symbol.iterator errors
+    const safeArgs = Array.isArray(args) ? args : (args ? [args] : []);
+    return callback(...safeArgs);
+  }),
+  invoke: (channel, ...args) => {
+    // Ensure args is always an array to prevent Symbol.iterator errors
+    const safeArgs = Array.isArray(args) ? args : (args ? [args] : []);
+    return ipcRenderer.invoke(channel, ...safeArgs);
+  },
   
   // Preload microphone check
   preloadMicCheck: () => ipcRenderer.invoke('preload-mic-check')

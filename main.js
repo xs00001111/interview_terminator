@@ -1555,6 +1555,12 @@ ipcMain.on('delete-context', async (event) => {
     takeScreenshot(false); // processAfterCapture = false for manual screenshots
   });
 
+  // Handle take-screenshot-with-ai IPC message
+  ipcMain.on('take-screenshot-with-ai', () => {
+    logger.info('Screenshot with AI processing requested via IPC');
+    takeScreenshot(true); // processAfterCapture = true for AI processing
+  });
+
 
 // Import the AuthService class
 const AuthService = require('./services/auth-service');
@@ -2174,47 +2180,6 @@ ipcMain.on('mic-permission-denied', async () => {
     }
   });
   
-  // Function to set up all server process event handlers
-  function setupServerProcessHandlers(process) {
-    // Add error handling for the server process
-    process.on('error', (error) => {
-      logger.error('Server process error:', error);
-      if (mainWindow) {
-        mainWindow.webContents.send('error', { message: `Server process error: ${error.message}` });
-      }
-    });
-    
-    // Handle server process exit
-    process.on('exit', (code, signal) => {
-      logger.error(`Server process exited with code ${code} and signal ${signal}`);
-      
-      // Only show error to user if this wasn't a normal shutdown
-      if (mainWindow && !app.isQuitting && code !== 0) {
-        mainWindow.webContents.send('error', { message: `Server process exited unexpectedly` });
-      }
-      
-      // Restart the server process if it exits unexpectedly and app is not quitting
-      if (!app.isQuitting) {
-        logger.info('Attempting to restart server process...');
-        
-        // Short delay before restarting to avoid rapid restart cycles
-        setTimeout(() => {
-          // Create a new server process with the same configuration and environment variables
-          if (process.platform === 'win32') {
-            serverProcess = spawn(process.execPath, [serverPath], {
-              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-              env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-            });
-          } else {
-            serverProcess = fork(serverPath, [], {
-              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-            });
-          }
-          
-          // Re-attach all the event handlers
-          setupServerProcessHandlers(serverProcess);
-          setupServerMessageHandler(serverProcess);
-
   // Explicit forwarder system to avoid duplicates and make message handling clear
   function forward(channel, data = null) {
     if (mainWindow) {
@@ -2474,7 +2439,7 @@ ipcMain.on('mic-permission-denied', async () => {
     if (mainWindow) {
       const forwardableMessages = [
         'transcript', 'interim-transcript', 'suggestion', 'suggestion-chunk', 
-        'suggestion-partial', 'error', 'ready', 'recording-status', 
+        'suggestion-partial', 'suggestion-processing', 'error', 'ready', 'recording-status', 
         'context-update', 'elaboration', 'screenshot-processed', 'processing-screenshot'
       ];
       
@@ -2487,6 +2452,47 @@ ipcMain.on('mic-permission-denied', async () => {
     }
   });
   } // End of setupServerMessageHandler function
+
+  // Function to set up all server process event handlers
+  function setupServerProcessHandlers(process) {
+    // Add error handling for the server process
+    process.on('error', (error) => {
+      logger.error('Server process error:', error);
+      if (mainWindow) {
+        mainWindow.webContents.send('error', { message: `Server process error: ${error.message}` });
+      }
+    });
+    
+    // Handle server process exit
+    process.on('exit', (code, signal) => {
+      logger.error(`Server process exited with code ${code} and signal ${signal}`);
+      
+      // Only show error to user if this wasn't a normal shutdown
+      if (mainWindow && !app.isQuitting && code !== 0) {
+        mainWindow.webContents.send('error', { message: `Server process exited unexpectedly` });
+      }
+      
+      // Restart the server process if it exits unexpectedly and app is not quitting
+      if (!app.isQuitting) {
+        logger.info('Attempting to restart server process...');
+        
+        // Short delay before restarting to avoid rapid restart cycles
+        setTimeout(() => {
+          // Create a new server process with the same configuration and environment variables
+          if (process.platform === 'win32') {
+            serverProcess = spawn(process.execPath, [serverPath], {
+              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+              env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+            });
+          } else {
+            serverProcess = fork(serverPath, [], {
+              stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+            });
+          }
+          
+          // Re-attach all the event handlers
+          setupServerProcessHandlers(serverProcess);
+          setupServerMessageHandler(serverProcess);
           
           // Notify the renderer that we're reconnecting
           if (mainWindow) {

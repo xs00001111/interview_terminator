@@ -647,8 +647,8 @@
                 window.PopupManager.onPopupHide();
             }
             
-            // Trigger screenshot capture
-            window.electron.takeScreenshot();
+            // Trigger screenshot capture with AI processing
+            window.electron.takeScreenshotWithAI();
         });
 
         
@@ -1648,7 +1648,15 @@
             if (answerTextElement) {
                 // Process the text for markdown and code highlighting
                 const processedText = processMarkdownContent(text);
-                answerTextElement.innerHTML = processedText;
+                
+                // Add typing cursor if still streaming
+                if (!isFinal) {
+                    answerTextElement.innerHTML = processedText + '<span class="typing-cursor"></span>';
+                    answerTextElement.classList.add('streaming-text');
+                } else {
+                    answerTextElement.innerHTML = processedText;
+                    answerTextElement.classList.remove('streaming-text');
+                }
                 
                 // Apply syntax highlighting to code blocks
                 if (window.Prism) {
@@ -1664,11 +1672,18 @@
             }
 
             if (isFinal) {
-                // Show copy button when streaming is complete
+                // Remove typing cursor and show copy button when streaming is complete
                 const actionsElement = currentStreamingCard.querySelector('.answer-actions');
                 if (actionsElement) {
                     actionsElement.style.display = 'block';
                 }
+                
+                // Remove typing cursor
+                const cursor = answerTextElement?.querySelector('.typing-cursor');
+                if (cursor) {
+                    cursor.remove();
+                }
+                
                 isStreaming = false;
                 currentStreamingCard = null;
             }
@@ -1696,7 +1711,16 @@
             window.electron.onSuggestionChunk((data) => {
                 console.log('[UI] Received AI suggestion chunk:', data);
                 const suggestionText = data.fullText || '';
-                addSuggestionMessage(suggestionText, data.isFinal, data.source);
+                addSuggestionMessage(suggestionText, data.isFinal || false, data.source);
+            });
+        }
+
+        // Listen for partial AI suggestions (streaming)
+        if (window.electron && window.electron.onSuggestionPartial) {
+            window.electron.onSuggestionPartial((data) => {
+                console.log('[UI] Received AI suggestion partial:', data);
+                const suggestionText = data.text || data.fullText || '';
+                addSuggestionMessage(suggestionText, data.isFinal || false, data.source);
             });
         }
 
@@ -1705,30 +1729,10 @@
             window.electron.onSuggestionProcessing((data) => {
                 console.log('[UI] AI suggestion processing started:', data);
                 
-                // Show progress indicator in AI card
-                const aiCardContent = document.getElementById('aiCardContent');
-                if (aiCardContent) {
-                    aiCardContent.innerHTML = `
-                        <div class="answer-card">
-                            <div class="answer-header">
-                                <svg class="loading-spinner" width="16" height="16" viewBox="0 0 24 24">
-                                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.416" stroke-dashoffset="31.416">
-                                        <animate attributeName="stroke-dasharray" dur="2s" values="0 31.416;15.708 15.708;0 31.416" repeatCount="indefinite"/>
-                                        <animate attributeName="stroke-dashoffset" dur="2s" values="0;-15.708;-31.416" repeatCount="indefinite"/>
-                                    </circle>
-                                </svg>
-                                Processing Screenshot...
-                            </div>
-                            <div class="answer-text">Analyzing screenshot and generating AI suggestions...</div>
-                        </div>
-                    `;
-                }
-                
-                // Ensure the AI card is visible
-                const aiCard = document.getElementById('aiCard');
-                if (aiCard && !aiCard.classList.contains('show')) {
-                    toggleAICard();
-                }
+                // Start streaming session immediately with loading message
+                isStreaming = false; // Reset streaming state
+                currentStreamingCard = null;
+                addSuggestionMessage('🔍 Analyzing screenshot and generating AI suggestions...', false, 'screenshot');
             });
         }
 
