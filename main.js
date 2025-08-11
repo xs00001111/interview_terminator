@@ -567,10 +567,10 @@ function createWindow() {
 
   // Open DevTools only in development mode
   // if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-  // 
-  //}
+  //     mainWindow.webContents.openDevTools();
+  // }
 
-  mainWindow.webContents.openDevTools();
+  
 
   // Set up window state tracking
   windowStateManager.trackWindow(mainWindow);
@@ -1552,13 +1552,7 @@ ipcMain.on('delete-context', async (event) => {
   // Handle take-screenshot IPC message
   ipcMain.on('take-screenshot', () => {
     logger.info('Screenshot requested via IPC');
-    takeScreenshot(false); // processAfterCapture = false for manual screenshots
-  });
-
-  // Handle take-screenshot-with-ai IPC message
-  ipcMain.on('take-screenshot-with-ai', () => {
-    logger.info('Screenshot with AI processing requested via IPC');
-    takeScreenshot(true); // processAfterCapture = true for AI processing
+    takeScreenshot(true); // processAfterCapture = false for manual screenshots
   });
 
 
@@ -2439,7 +2433,7 @@ ipcMain.on('mic-permission-denied', async () => {
     if (mainWindow) {
       const forwardableMessages = [
         'transcript', 'interim-transcript', 'suggestion', 'suggestion-chunk', 
-        'suggestion-partial', 'suggestion-processing', 'error', 'ready', 'recording-status', 
+        'suggestion-partial', 'error', 'ready', 'recording-status', 
         'context-update', 'elaboration', 'screenshot-processed', 'processing-screenshot'
       ];
       

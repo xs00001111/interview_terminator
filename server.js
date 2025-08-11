@@ -3,9 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 const envCandidates = [
-  path.join(__dirname, '.env'),                          // development .env file
   path.join(__dirname, '.env.production'),               // inside asar (mac build)
-  ...(process.resourcesPath ? [path.join(process.resourcesPath, '.env.production')] : []), // alongside resources (win build) - only if resourcesPath exists
+  path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
 ];
 for (const p of envCandidates) {
   if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
