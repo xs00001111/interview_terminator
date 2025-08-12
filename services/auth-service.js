@@ -126,7 +126,14 @@ class AuthService extends EventEmitter {
       if (error) throw error;
 
       const authUrl = data.url;
+      const { pkce } = data;
       console.log('[AUTH] Google OAuth URL generated:', authUrl);
+
+      // Store PKCE code verifier for later use in callback
+      if (pkce && pkce.code_verifier) {
+        sessionStore.saveSession({ pkce_verifier: pkce.code_verifier });
+        console.log('[AUTH] Stored PKCE code verifier');
+      }
 
       // Extract and store state for later verification
       const stateMatch = authUrl.match(/[?&]state=([^&]+)/);
@@ -174,22 +181,21 @@ class AuthService extends EventEmitter {
         callbackUrl = `${callbackUrl}${sep}state=${state}`;
       }
 
-      // Convert the callback URL to the format Supabase expects for hash-based URLs
-      // Some versions expect fragments (#) instead of query parameters (?)
-      const hashUrl = callbackUrl.replace('?', '#');
-      console.log('[AUTH] Trying with hash format:', hashUrl);
+      // Retrieve stored PKCE code verifier
+      const storedData = sessionStore.loadSession();
+      const codeVerifier = storedData?.pkce_verifier;
       
-      // Try exchangeCodeForSession with hash format first
-      let { data, error } = await this.supabase.auth.exchangeCodeForSession(hashUrl);
-      
-      if (error && error.message?.includes('flow_state_not_found')) {
-        console.log('[AUTH] Hash format failed, trying original query format...');
-        
-        // Try with original query format
-        const result = await this.supabase.auth.exchangeCodeForSession(callbackUrl);
-        data = result.data;
-        error = result.error;
+      if (!codeVerifier) {
+        throw new Error('PKCE code verifier not found - OAuth flow may have been interrupted');
       }
+      
+      console.log('[AUTH] Retrieved PKCE code verifier for session exchange');
+      
+      // Use exchangeCodeForSession with the stored code verifier
+      const { data, error } = await this.supabase.auth.exchangeCodeForSession({
+        authCode: code,
+        codeVerifier: codeVerifier
+      });
       
       if (error) {
         console.error('[AUTH] exchangeCodeForSession failed:', error);
@@ -233,8 +239,9 @@ class AuthService extends EventEmitter {
       // Emit auth success event
       this.emit('auth-success', this.session);
 
-      // Clear stored OAuth state now that flow is complete
+      // Clear stored OAuth state and PKCE verifier now that flow is complete
       this.oauthState = null;
+      sessionStore.clearPkceVerifier();
 
       return { success: true, session: this.session };
     } catch (error) {

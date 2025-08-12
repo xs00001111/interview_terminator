@@ -119,6 +119,24 @@ class SessionStoreService {
   getSessionSavedTimestamp() {
     return sessionStore.get('sessionSavedAt', null);
   }
+
+  /**
+   * Clear the PKCE verifier from stored session data
+   */
+  clearPkceVerifier() {
+    try {
+      const session = sessionStore.get('session');
+      if (session && session.pkce_verifier) {
+        delete session.pkce_verifier;
+        sessionStore.set('session', session);
+        logger.info('PKCE verifier cleared from session');
+      }
+      return true;
+    } catch (error) {
+      logger.error('Failed to clear PKCE verifier:', error);
+      return false;
+    }
+  }
 }
 
 module.exports = new SessionStoreService();

@@ -1002,7 +1002,7 @@
         
         logoutItem.addEventListener('click', async () => {
             try {
-                await window.auth.logout();
+                await window.auth.signOut();
                 isLoggedIn = false;
                 currentUser = null;
                 userPlan = null;
