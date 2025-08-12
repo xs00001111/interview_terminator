@@ -10,6 +10,9 @@ const sessionStore = new Store({
   encryptionKey: 'interview-helper-secure-key', // For basic encryption of sensitive data
 });
 
+// Create a separate store for PKCE data to avoid conflicts
+const pkceStore = new Store({ name: 'pkce-storage' });
+
 /**
  * Session storage service for persisting authentication sessions
  */
@@ -115,18 +118,32 @@ class SessionStoreService {
   /**
    * Get the timestamp when the session was last saved
    * @returns {String|null} ISO timestamp or null if not available
-  */
+   */
   getSessionSavedTimestamp() {
     return sessionStore.get('sessionSavedAt', null);
   }
 
   /**
-   * Save PKCE verifier separately from session data
-   * @param {String} verifier - The PKCE code verifier to store
+   * Clear the PKCE verifier from stored session data
+   */
+  clearPkceVerifier() {
+    try {
+      pkceStore.delete('pkce_verifier');
+      logger.info('PKCE verifier cleared');
+      return true;
+    } catch (error) {
+      logger.error('Failed to clear PKCE verifier:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Save the PKCE verifier to storage
+   * @param {String} verifier - The PKCE code verifier
    */
   savePkceVerifier(verifier) {
     try {
-      sessionStore.set('pkce_verifier', verifier);
+      pkceStore.set('pkce_verifier', verifier);
       logger.info('PKCE verifier saved');
       return true;
     } catch (error) {
@@ -137,11 +154,11 @@ class SessionStoreService {
 
   /**
    * Load the PKCE verifier from storage
-   * @returns {String|null} The stored verifier or null if not found
+   * @returns {String|null} The stored verifier or null
    */
   loadPkceVerifier() {
     try {
-      const verifier = sessionStore.get('pkce_verifier');
+      const verifier = pkceStore.get('pkce_verifier');
       if (verifier) {
         logger.info('PKCE verifier loaded from storage');
         return verifier;
@@ -151,20 +168,6 @@ class SessionStoreService {
     } catch (error) {
       logger.error('Failed to load PKCE verifier:', error);
       return null;
-    }
-  }
-
-  /**
-   * Clear the stored PKCE verifier
-   */
-  clearPkceVerifier() {
-    try {
-      sessionStore.delete('pkce_verifier');
-      logger.info('PKCE verifier cleared from storage');
-      return true;
-    } catch (error) {
-      logger.error('Failed to clear PKCE verifier:', error);
-      return false;
     }
   }
 }
