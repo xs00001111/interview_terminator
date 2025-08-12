@@ -115,22 +115,52 @@ class SessionStoreService {
   /**
    * Get the timestamp when the session was last saved
    * @returns {String|null} ISO timestamp or null if not available
-   */
+  */
   getSessionSavedTimestamp() {
     return sessionStore.get('sessionSavedAt', null);
   }
 
   /**
-   * Clear the PKCE verifier from stored session data
+   * Save PKCE verifier separately from session data
+   * @param {String} verifier - The PKCE code verifier to store
+   */
+  savePkceVerifier(verifier) {
+    try {
+      sessionStore.set('pkce_verifier', verifier);
+      logger.info('PKCE verifier saved');
+      return true;
+    } catch (error) {
+      logger.error('Failed to save PKCE verifier:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load the PKCE verifier from storage
+   * @returns {String|null} The stored verifier or null if not found
+   */
+  loadPkceVerifier() {
+    try {
+      const verifier = sessionStore.get('pkce_verifier');
+      if (verifier) {
+        logger.info('PKCE verifier loaded from storage');
+        return verifier;
+      }
+      logger.info('No PKCE verifier found in storage');
+      return null;
+    } catch (error) {
+      logger.error('Failed to load PKCE verifier:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear the stored PKCE verifier
    */
   clearPkceVerifier() {
     try {
-      const session = sessionStore.get('session');
-      if (session && session.pkce_verifier) {
-        delete session.pkce_verifier;
-        sessionStore.set('session', session);
-        logger.info('PKCE verifier cleared from session');
-      }
+      sessionStore.delete('pkce_verifier');
+      logger.info('PKCE verifier cleared from storage');
       return true;
     } catch (error) {
       logger.error('Failed to clear PKCE verifier:', error);
