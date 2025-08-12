@@ -1869,7 +1869,7 @@ const supabase = createClient(
 );
 
 // Initialize the auth service
-const authService = new AuthService(supabase);
+ authService = new AuthService(supabase);
   
   // Handle auth events
   authService.on('auth-success', (session) => {
