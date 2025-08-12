@@ -131,7 +131,7 @@ class AuthService extends EventEmitter {
 
       // Store PKCE code verifier for later use in callback
       if (pkce && pkce.code_verifier) {
-        sessionStore.saveSession({ pkce_verifier: pkce.code_verifier });
+        sessionStore.savePkceVerifier(pkce.code_verifier);
         console.log('[AUTH] Stored PKCE code verifier');
       }
 
@@ -182,8 +182,7 @@ class AuthService extends EventEmitter {
       }
 
       // Retrieve stored PKCE code verifier
-      const storedData = sessionStore.loadSession();
-      const codeVerifier = storedData?.pkce_verifier;
+      const codeVerifier = sessionStore.loadPkceVerifier();
       
       if (!codeVerifier) {
         throw new Error('PKCE code verifier not found - OAuth flow may have been interrupted');
