@@ -1691,9 +1691,6 @@ async function decrementInterviewCount(userId) {
   }
 }
 
-// Create an instance of the AuthService
-let authService = null;
-
 // Register custom protocol for deep link handling
 app.setAsDefaultProtocolClient('myapp');
 
@@ -1701,8 +1698,8 @@ app.setAsDefaultProtocolClient('myapp');
 app.on('open-url', (event, url) => {
   event.preventDefault();
   console.log('[DEEP-LINK] Received URL:', url);
-  if (authService) {
-    authService.handleDeepLinkCallback(url);
+  if (mainWindow) {
+    mainWindow.webContents.send('auth:callback-url', url);
   }
 });
 
@@ -1716,8 +1713,8 @@ if (!gotLock) {
     const deepLink = argv.find(a => a.startsWith('myapp://'));
     if (deepLink) {
       console.log('[DEEP-LINK] Found deep link:', deepLink);
-      if (authService) {
-        authService.handleDeepLinkCallback(deepLink);
+      if (mainWindow) {
+        mainWindow.webContents.send('auth:callback-url', deepLink);
       }
       // Focus the main window
       if (mainWindow) {

@@ -55,42 +55,6 @@ async function requestMicPermission() {
 contextBridge.exposeInMainWorld('mic', { request: requestMicPermission });
 
 // Expose auth methods
-contextBridge.exposeInMainWorld('auth', {
-  signInWithGoogle: () => {
-    console.log('[PRELOAD] Invoking Google sign-in');
-    return ipcRenderer.invoke('auth-google-signin');
-  },
-  signInWithEmail: (email, password) => {
-    console.log('[PRELOAD] Invoking email sign-in');
-    return ipcRenderer.invoke('auth-signin-email', { email, password });
-  }, 
-  handleAuthCallback: (url) => {
-    console.log('[PRELOAD] Invoking auth-handle-callback');
-    return ipcRenderer.invoke('auth-handle-callback', url);
-  },
-  getSession: () => {
-    console.log('[PRELOAD] Invoking auth-get-session');
-    return ipcRenderer.invoke('auth-get-session');
-  },
-  getUserInfo: () => {
-    console.log('[PRELOAD] Invoking auth-get-user-info');
-    return ipcRenderer.invoke('auth-get-user-info');
-  },
-  signOut: () => {
-    console.log('[PRELOAD] Invoking auth-signout');
-    return ipcRenderer.invoke('auth-signout');
-  },
-  // Listen for auth events from the main process
-  onAuthSuccess: (callback) => ipcRenderer.on('auth-success', (_, data) => callback(data)),
-  onAuthError: (callback) => ipcRenderer.on('auth-error', (_, data) => callback(data)),
-  onSignOut: (callback) => ipcRenderer.on('sign-out', () => callback()),
-});
-
-contextBridge.exposeInMainWorld('appWindow', {
-  expand:   () => ipcRenderer.send('ui-expand'),
-  collapse: () => ipcRenderer.send('ui-collapse')
-});
-
 contextBridge.exposeInMainWorld('electron', {
   // Window controls
   minimize: () => ipcRenderer.send('minimize'),

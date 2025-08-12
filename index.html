@@ -1259,43 +1259,14 @@
 
 
 
-        // Handle Google sign-in
-        const googleLoginBtn = document.getElementById('googleLoginBtn');
-        googleLoginBtn.addEventListener('click', async () => {
-            try {
-                googleLoginBtn.disabled = true;
-                googleLoginBtn.textContent = 'Opening browser...';
-                
-                // Clear any previous auth status
-                showAuthStatus('');
-                
-                const result = await window.auth.signInWithGoogle();
-                
-                if (result.success) {
-                    showAuthStatus('Check your browser to complete sign-in');
-                    // The callback will be handled by the auth success listener
-                } else {
-                    showAuthStatus('Failed to start Google sign-in: ' + result.error, true);
-                    resetGoogleButton();
-                }
-            } catch (error) {
-                console.error('[UI] Google sign-in error:', error);
-                showAuthStatus('An error occurred during Google sign-in', true);
-                resetGoogleButton();
-            }
-        });
+        // Google sign-in handler moved to DOMContentLoaded section after renderer-auth.js loads
 
         function resetGoogleButton() {
-            googleLoginBtn.disabled = false;
-            googleLoginBtn.innerHTML = `
-                <svg width="18" height="18" viewBox="0 0 24 24" style="margin-right: 8px;">
-                    <path fill="#4285f4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34a853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#fbbc05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                    <path fill="#ea4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                </svg>
-                Continue with Google
-            `;
+            const googleLoginBtn = document.getElementById('googleLoginBtn');
+            if (googleLoginBtn) {
+                googleLoginBtn.disabled = false;
+                googleLoginBtn.innerHTML = '<img src="https://img.icons8.com/color/16/000000/google-logo.png" alt="Google logo"/> Sign in with Google';
+            }
         }
 
         // Handle auth callback from deep link - use renderer auth
@@ -1305,10 +1276,10 @@
                 
                 try {
                     // Use renderer auth to handle the callback
-                    const result = await rendererHandleAuthCallback(callbackUrl);
+                    const result = await window.auth.handleAuthCallback(callbackUrl);
                     
-                    if (result.success) {
-                        console.log('[UI] Google auth successful:', result.user.email);
+                    if (result.session) {
+                        console.log('[UI] Google auth successful:', result.session.user.email);
                         showAuthStatus('Google sign-in successful!');
                         
                         // Update login state and hide auth container after a short delay
@@ -1318,7 +1289,7 @@
                         }, 1500);
                     } else {
                         console.error('[UI] Google auth failed:', result.error);
-                        showAuthStatus('Google sign-in failed: ' + result.error, true);
+                        showAuthStatus('Google sign-in failed: ' + result.error.message, true);
                         resetGoogleButton();
                     }
                 } catch (error) {
@@ -2096,6 +2067,69 @@
                 return hasPermission;
             }
         };
+    </script>
+
+    <script src="./renderer-auth.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const authForm = document.getElementById('authForm');
+            if(authForm) {
+                authForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const email = document.getElementById('emailInput').value;
+                    const password = document.getElementById('passwordInput').value;
+                    const { error } = await window.auth.signInWithEmailPassword(email, password);
+                    if (error) {
+                        console.error('Sign-in failed:', error.message);
+                        // Optionally, display the error to the user
+                    }
+                });
+            }
+
+            const googleLoginBtn = document.getElementById('googleLoginBtn');
+            if(googleLoginBtn) {
+                googleLoginBtn.addEventListener('click', async () => {
+                    try {
+                        googleLoginBtn.disabled = true;
+                        googleLoginBtn.textContent = 'Opening browser...';
+                        
+                        // Clear any previous auth status
+                        showAuthStatus('');
+                        
+                        const result = await window.auth.signInWithGoogle();
+                        
+                        if (result.success) {
+                            showAuthStatus('Check your browser to complete sign-in');
+                            // The callback will be handled by the auth success listener
+                        } else {
+                            showAuthStatus('Failed to start Google sign-in: ' + result.error, true);
+                            resetGoogleButton();
+                        }
+                    } catch (error) {
+                        console.error('[UI] Google sign-in error:', error);
+                        showAuthStatus('An error occurred during Google sign-in', true);
+                        resetGoogleButton();
+                    }
+                });
+            }
+
+            function resetGoogleButton() {
+                googleLoginBtn.disabled = false;
+                googleLoginBtn.innerHTML = `
+                    <svg width="18" height="18" viewBox="0 0 24 24" style="margin-right: 8px;">
+                        <path fill="#4285f4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34a853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#fbbc05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                        <path fill="#ea4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                    </svg>
+                    Continue with Google
+                `;
+            }
+
+            window.electron.on('auth:callback-url', (url) => {
+                window.auth.handleAuthCallback(url);
+            });
+        });
     </script>
 </body>
 </html>
