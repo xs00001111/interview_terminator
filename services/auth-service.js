@@ -1,23 +1,10 @@
-const { createClient } = require('@supabase/supabase-js');
 const EventEmitter = require('events');
 const sessionStore = require('../utils/session-store');
 
-// Get Supabase configuration from environment variables
-const SUPABASE_URL = "https://aqhcipqqdtchivmbxrap.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxaGNpcHFxZHRjaGl2bWJ4cmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NzE0NDUsImV4cCI6MjA1NzM0NzQ0NX0.ABSLZyrZ-8LojAriQKlJALmsgChKagrPLXzVabf559Q";
-const REDIRECT_URL = 'app://callback';
-
-// Add validation to ensure environment variables are loaded
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('[AUTH] Supabase credentials not found in environment variables');
-  console.error('[AUTH] Please ensure SUPABASE_URL and SUPABASE_ANON_KEY are set in .env file');
-}
-
 class AuthService extends EventEmitter {
-  constructor() {
+  constructor(supabaseClient) {
     super();
-    this.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    this.authWindow = null;
+    this.supabase = supabaseClient; // Use the Supabase client passed from main process
     this.session = null;
     this.subscription = null;
   }
@@ -118,7 +105,120 @@ class AuthService extends EventEmitter {
     }
   }
 
+  // Sign in with Google OAuth using system browser
+  async signInWithGoogleDesktop() {
+    try {
+      const { data, error } = await this.supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: 'myapp://auth-callback',
+          skipBrowserRedirect: true, // important for Electron - don't auto-redirect
+          queryParams: {
+            redirect_to: 'myapp://auth-callback'  // Ensure this parameter is set
+          }
+        },
+      });
 
+      if (error) throw error;
+
+      console.log('[AUTH] Google OAuth URL generated:', data.url);
+      
+      // Return the OAuth URL so main process can open it in system browser
+      return {
+        success: true,
+        authUrl: data.url
+      };
+    } catch (error) {
+      console.error('[AUTH] Google OAuth initiation failed:', error.message);
+      this.emit('auth-error', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Handle auth callback from deep link 
+  async handleDeepLinkCallback(callbackUrl) {
+    try {
+      console.log('[AUTH] Processing deep link callback:', callbackUrl);
+      
+      // Parse the URL to get the code and state parameters
+      const url = new URL(callbackUrl);
+      const code = url.searchParams.get('code');
+      
+      if (!code) {
+        throw new Error('No authorization code received in callback');
+      }
+      
+      console.log('[AUTH] Extracted code from callback:', code.substring(0, 10) + '...');
+      
+      // Convert the callback URL to the format Supabase expects for hash-based URLs
+      // Some versions expect fragments (#) instead of query parameters (?)
+      const hashUrl = callbackUrl.replace('?', '#');
+      console.log('[AUTH] Trying with hash format:', hashUrl);
+      
+      // Try exchangeCodeForSession with hash format first
+      let { data, error } = await this.supabase.auth.exchangeCodeForSession(hashUrl);
+      
+      if (error && error.message?.includes('flow_state_not_found')) {
+        console.log('[AUTH] Hash format failed, trying original query format...');
+        
+        // Try with original query format
+        const result = await this.supabase.auth.exchangeCodeForSession(callbackUrl);
+        data = result.data;
+        error = result.error;
+      }
+      
+      if (error) {
+        console.error('[AUTH] exchangeCodeForSession failed:', error);
+        this.emit('auth-error', error.message);
+        return { success: false, error: error.message };
+      }
+      
+      var sessionData = data;
+      
+      if (!sessionData.session) {
+        throw new Error('No session after successful auth exchange');
+      }
+
+      // Extend the session expiration time to 7 days from now
+      const extendedSession = { ...sessionData.session };
+      const now = new Date();
+      const sevenDaysInSeconds = 7 * 24 * 60 * 60; // 7 days in seconds
+      extendedSession.expires_at = Math.floor(now.getTime() / 1000) + sevenDaysInSeconds;
+      
+      this.session = extendedSession;
+      console.log('[AUTH] Google OAuth login successful');
+      console.log('[AUTH] Session details:', {
+        user: sessionData.session.user.email,
+        expires_at: new Date(extendedSession.expires_at * 1000).toISOString(),
+        provider: sessionData.session.user.app_metadata?.provider
+      });
+      
+      // Check if user has an active subscription
+      const subscription = await this.fetchUserPlan();
+      if (subscription) {
+        console.log('[AUTH] User has an active subscription');
+        this.subscription = subscription;
+        // Save session and subscription to persistent storage
+        sessionStore.saveSession(this.session, this.subscription);
+      } else {
+        console.log('[AUTH] User does not have an active plan - using free plan');
+        // Save only the session to persistent storage
+        sessionStore.saveSession(this.session);
+      }
+      
+      // Emit auth success event
+      this.emit('auth-success', this.session);
+      
+      return { success: true, session: this.session };
+    } catch (error) {
+      console.error('[AUTH] Error handling deep link callback:', error);
+      this.emit('auth-error', error.message);
+      return { success: false, error: error.message };
+    }
+  }
 
   // Sign in with email/password
   async signInWithEmailPassword(email, password) {
@@ -176,87 +276,17 @@ class AuthService extends EventEmitter {
     }
   }
 
-  // Create the auth window
-  createAuthWindow(authUrl) {
-    this.authWindow = new BrowserWindow({
-      width: 800,
-      height: 600,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
-      }
-    });
-
-    // Register protocol handler for the callback
-    if (!session.defaultSession.protocol.isRegisteredProtocol('app')) {
-      session.defaultSession.protocol.registerHttpProtocol('app', (request, callback) => {
-        const url = new URL(request.url);
-        if (url.hostname === 'callback') {
-          this.handleAuthCallback(url);
-        }
-      });
-    }
-
-    // Load the auth URL
-    this.authWindow.loadURL(authUrl);
-
-    // Handle window close
-    this.authWindow.on('closed', () => {
-      this.authWindow = null;
-    });
-  }
-
-  // Handle the auth callback
-  async handleAuthCallback(url) {
+  // Get the current session
+  async getSession() {
     try {
-      // Extract the authorization code from the URL
-      const code = new URLSearchParams(url.search).get('code');
-      
-      if (!code) {
-        throw new Error('No authorization code received');
-      }
-      
-      // Exchange the code for a token
-      const { data, error } = await this.supabase.auth.signInWithPassword({
-        email: this.email,
-        password: this.password
-      });
-      
+      const { data, error } = await this.supabase.auth.getSession();
       if (error) throw error;
-      
-      // Store the session
       this.session = data.session;
-      
-      // Save session to persistent storage
-      sessionStore.saveSession(this.session);
-      
-      // Close the auth window
-      if (this.authWindow) {
-        this.authWindow.close();
-        this.authWindow = null;
-      }
-      
-      // Emit auth success event
-      this.emit('auth-success', this.session);
-      
       return this.session;
     } catch (error) {
-      console.error('Error handling auth callback:', error);
-      this.emit('auth-error', error.message);
-      
-      // Close the auth window
-      if (this.authWindow) {
-        this.authWindow.close();
-        this.authWindow = null;
-      }
-      
+      console.error('[AUTH] Failed to get current session:', error);
       return null;
     }
-  }
-
-  // Get the current session
-  getSession() {
-    return this.session;
   }
 
   // Check if we have a valid session

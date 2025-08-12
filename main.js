@@ -1694,6 +1694,40 @@ async function decrementInterviewCount(userId) {
 // Create an instance of the AuthService
 let authService = null;
 
+// Register custom protocol for deep link handling
+app.setAsDefaultProtocolClient('myapp');
+
+// Handle deep link URLs on macOS
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  console.log('[DEEP-LINK] Received URL:', url);
+  if (authService) {
+    authService.handleDeepLinkCallback(url);
+  }
+});
+
+// Handle deep link URLs on Windows/Linux (second instance)
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (event, argv) => {
+    console.log('[DEEP-LINK] Second instance with args:', argv);
+    const deepLink = argv.find(a => a.startsWith('myapp://'));
+    if (deepLink) {
+      console.log('[DEEP-LINK] Found deep link:', deepLink);
+      if (authService) {
+        authService.handleDeepLinkCallback(deepLink);
+      }
+      // Focus the main window
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+      }
+    }
+  });
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
   // Force-allow media permissions in Electron (bypasses Chrome UI)
@@ -1818,8 +1852,24 @@ app.whenReady().then(async () => {
     // update-electron-app handles installation automatically when app restarts
     return { willInstallOnRestart: true };
   });
-  // Initialize the auth service
-  authService = new AuthService();
+const { createClient } = require('@supabase/supabase-js');
+
+// Centralized Supabase client
+const supabase = createClient(
+  "https://aqhcipqqdtchivmbxrap.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxaGNpcHFxZHRjaGl2bWJ4cmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NzE0NDUsImV4cCI6MjA1NzM0NzQ0NX0.ABSLZyrZ-8LojAriQKlJALmsgChKagrPLXzVabf559Q",
+  {
+    auth: {
+      flowType: 'pkce',
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false, // Important for Electron
+    },
+  }
+);
+
+// Initialize the auth service
+const authService = new AuthService(supabase);
   
   // Handle auth events
   authService.on('auth-success', (session) => {
@@ -1865,44 +1915,58 @@ app.whenReady().then(async () => {
   }
   
   // Register the complete-login handler
-  ipcMain.handle('complete-login', async (event, data) => {
-    logger.info('[AUTH] Handling complete-login request');
+  // Centralized Authentication Handlers
+
+  // Handle Google sign-in request from renderer
+  ipcMain.handle('auth-google-signin', async () => {
     try {
-      const { email, password } = data;
-      const success = await authService.signInWithEmailPassword(email, password);
-      return { success };
-    } catch (error) {
-      logger.error('[AUTH] Error in complete-login handler:', error);
-      return { success: false, error: error.message };
-    }
-  });
-  
-  // Handle sign-in request
-  ipcMain.handle('sign-in', async (event, data) => {
-    try {
-      logger.info('Received sign-in request');
-      
-      if (!authService) {
-        logger.warn('No auth service available for sign-in');
-        return { success: false, error: 'Authentication service not available' };
-      }
-      
-      const { email, password } = data;
-      const success = await authService.signInWithEmailPassword(email, password);
-      
-      if (success) {
-        logger.info('User signed in successfully');
+      logger.info('[AUTH] Invoking Google sign-in flow');
+      const result = await authService.signInWithGoogleDesktop();
+      if (result.success) {
+        shell.openExternal(result.authUrl);
         return { success: true };
-      } else {
-        logger.error('Sign-in failed');
-        return { success: false, error: 'Invalid credentials' };
       }
+      return { success: false, error: result.error };
     } catch (error) {
-      logger.error('Error in sign-in handler:', error);
+      logger.error('[AUTH] Google sign-in failed:', error);
       return { success: false, error: error.message };
     }
   });
-  
+
+  // Handle auth callback from deep link
+  ipcMain.handle('auth-handle-callback', async (event, url) => {
+    try {
+      logger.info('[AUTH] Handling auth callback:', url);
+      const result = await authService.handleDeepLinkCallback(url);
+      return result;
+    } catch (error) {
+      logger.error('[AUTH] Callback handling failed:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Get current session
+  ipcMain.handle('auth-get-session', async () => {
+    try {
+      const session = await authService.getSession();
+      return session;
+    } catch (error) {
+      logger.error('[AUTH] Failed to get session:', error);
+      return null;
+    }
+  });
+
+  // Handle sign-out
+  ipcMain.handle('auth-signout', async () => {
+    try {
+      const success = await authService.signOut();
+      return success;
+    } catch (error) {
+      logger.error('[AUTH] Sign-out failed:', error);
+      return false;
+    }
+  });
+
   // Handle logout request
   ipcMain.handle('logout', async () => {
     try {

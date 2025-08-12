@@ -56,42 +56,26 @@ contextBridge.exposeInMainWorld('mic', { request: requestMicPermission });
 
 // Expose auth methods
 contextBridge.exposeInMainWorld('auth', {
-  completeLogin: (data) => {
-    console.log('[PRELOAD] Invoking complete-login with data:', data);
-    return ipcRenderer.invoke('complete-login', data);
+  signInWithGoogle: () => {
+    console.log('[PRELOAD] Invoking Google sign-in');
+    return ipcRenderer.invoke('auth-google-signin');
   },
-  logout: () => {
-    console.log('[PRELOAD] Invoking logout');
-    return ipcRenderer.invoke('logout');
+  handleAuthCallback: (url) => {
+    console.log('[PRELOAD] Invoking auth-handle-callback');
+    return ipcRenderer.invoke('auth-handle-callback', url);
   },
-  onAuthError: (callback) => ipcRenderer.on('auth-error', (_, data) => {
-    console.log('[PRELOAD] Received auth-error event:', data);
-    callback(data);
-  }),
-  onAuthSuccess: (callback) => ipcRenderer.on('auth-success', (_, data) => {
-    console.log('[PRELOAD] Received auth-success event:', data);
-    callback(data);
-  }),
-  onAuthRequired: (callback) => ipcRenderer.on('auth-required', (_, data) => {
-    console.log('[PRELOAD] Received auth-required event:', data);
-    callback(data);
-  }),
-  onSignOut: (callback) => ipcRenderer.on('sign-out', (_, data) => {
-    console.log('[PRELOAD] Received sign-out event:', data);
-    callback(data);
-  }),
-  checkSession: () => {
-    console.log('[PRELOAD] Checking session status');
-    return ipcRenderer.invoke('check-session');
+  getSession: () => {
+    console.log('[PRELOAD] Invoking auth-get-session');
+    return ipcRenderer.invoke('auth-get-session');
   },
-  signIn: (email, password) => {
-    console.log('[PRELOAD] Invoking sign-in with email:', email);
-    return ipcRenderer.invoke('sign-in', { email, password });
+  signOut: () => {
+    console.log('[PRELOAD] Invoking auth-signout');
+    return ipcRenderer.invoke('auth-signout');
   },
-  getUserInfo: () => {
-    console.log('[PRELOAD] Getting user info');
-    return ipcRenderer.invoke('get-user-info');
-  }
+  // Listen for auth events from the main process
+  onAuthSuccess: (callback) => ipcRenderer.on('auth-success', (_, data) => callback(data)),
+  onAuthError: (callback) => ipcRenderer.on('auth-error', (_, data) => callback(data)),
+  onSignOut: (callback) => ipcRenderer.on('sign-out', () => callback()),
 });
 
 contextBridge.exposeInMainWorld('appWindow', {
