@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld('auth', {
     console.log('[PRELOAD] Invoking Google sign-in');
     return ipcRenderer.invoke('auth-google-signin');
   },
+  signInWithEmail: (email, password) => {
+    console.log('[PRELOAD] Invoking email sign-in');
+    return ipcRenderer.invoke('auth-signin-email', { email, password });
+  }, 
   handleAuthCallback: (url) => {
     console.log('[PRELOAD] Invoking auth-handle-callback');
     return ipcRenderer.invoke('auth-handle-callback', url);
@@ -67,6 +71,10 @@ contextBridge.exposeInMainWorld('auth', {
   getSession: () => {
     console.log('[PRELOAD] Invoking auth-get-session');
     return ipcRenderer.invoke('auth-get-session');
+  },
+  getUserInfo: () => {
+    console.log('[PRELOAD] Invoking auth-get-user-info');
+    return ipcRenderer.invoke('auth-get-user-info');
   },
   signOut: () => {
     console.log('[PRELOAD] Invoking auth-signout');

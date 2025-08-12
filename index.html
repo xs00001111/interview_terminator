@@ -1113,9 +1113,9 @@
         async function checkExistingSession() {
             try {
                 console.log('[UI] Checking for existing session...');
-                const sessionValid = await window.auth.checkSession();
+                const session = await window.auth.getSession();
                 
-                if (sessionValid) {
+                if (session) {
                     console.log('[UI] Valid session found, updating UI state');
                     isLoggedIn = true;
                     
@@ -1221,7 +1221,7 @@
             
             try {
                 // Use the auth API from preload.js
-                const result = await window.auth.signIn(email, password);
+                const result = await window.auth.signInWithEmail(email, password);
                 
                 if (!result.success) {
                      showAuthStatus(result.error || 'Sign in failed', true);
@@ -1273,7 +1273,7 @@
                 
                 if (result.success) {
                     showAuthStatus('Check your browser to complete sign-in');
-                    // The callback will be handled by the auth callback listener
+                    // The callback will be handled by the auth success listener
                 } else {
                     showAuthStatus('Failed to start Google sign-in: ' + result.error, true);
                     resetGoogleButton();
@@ -1331,6 +1331,60 @@
 
         // Set up the callback handler
         setupAuthCallbackHandler();
+
+        // Set up auth success listener for Google OAuth
+        window.auth.onAuthSuccess(async (sessionData) => {
+            console.log('[UI] Auth success event received:', sessionData);
+            showAuthStatus('Google sign-in successful!');
+            
+            try {
+                // Set logged in state
+                isLoggedIn = true;
+                
+                // Extract user info from session data
+                if (sessionData && sessionData.user) {
+                    currentUser = sessionData.user;
+                    console.log('[UI] Google user info loaded:', currentUser.email);
+                    
+                    // Try to get additional user info (plan details) if getUserInfo is available
+                    if (window.auth.getUserInfo) {
+                        try {
+                            const userInfo = await window.auth.getUserInfo();
+                            if (userInfo && userInfo.user) {
+                                currentUser = userInfo.user;
+                                userPlan = userInfo.plan;
+                                console.log('[UI] Extended user info loaded:', currentUser.email, 'Plan:', userPlan?.plan_type);
+                            }
+                        } catch (userInfoError) {
+                            console.warn('[UI] Could not load extended user info:', userInfoError);
+                        }
+                    }
+                } else {
+                    console.warn('[UI] No user data in session');
+                }
+                
+                // Update the UI immediately
+                updateLoginState();
+                
+                // Hide auth container after a short delay
+                setTimeout(() => {
+                    hideAuthContainer();
+                    resetGoogleButton();
+                }, 1500);
+                
+            } catch (error) {
+                console.error('[UI] Error processing auth success:', error);
+                showAuthStatus('Authentication succeeded but failed to update UI', true);
+                resetGoogleButton();
+            }
+        });
+
+        // Set up auth error listener
+        window.auth.onAuthError((errorData) => {
+            console.error('[UI] Auth error event received:', errorData);
+            showAuthStatus('Authentication failed: ' + errorData.message, true);
+            resetGoogleButton();
+        });
 
         // Close auth container when clicking outside
         authContainer.addEventListener('click', (e) => {

@@ -1,5 +1,8 @@
 const EventEmitter = require('events');
 const sessionStore = require('../utils/session-store');
+const { createLogger } = require('../utils/logger');
+
+const logger = createLogger('AuthService');
 
 class AuthService extends EventEmitter {
   constructor(supabaseClient) {
@@ -277,20 +280,81 @@ class AuthService extends EventEmitter {
   }
 
   // Get the current session
-  async getSession() {
-    try {
-      const { data, error } = await this.supabase.auth.getSession();
-      if (error) throw error;
-      this.session = data.session;
-      return this.session;
-    } catch (error) {
-      console.error('[AUTH] Failed to get current session:', error);
-      return null;
-    }
+  /**
+   * Get the current session
+   * @returns {Object|null} The current session object
+   */
+  getSession() {
+    logger.info(`getSession called, returning session: ${JSON.stringify(this.session)}`);
+    return this.session;
   }
 
-  // Check if we have a valid session
-  // Add these debug logs to the hasValidSession method in auth-service.js
+  /**
+   * Check if we have a valid session
+   * @returns {Boolean} True if a valid session is initialized, false otherwise
+   */
+  async initialize() {
+    logger.info('Initializing AuthService...');
+    const session = sessionStore.loadSession();
+    logger.info(`Loaded session from store: ${JSON.stringify(session)}`);
+
+    if (!session) {
+      logger.info('No stored session found.');
+      return false;
+    }
+
+    // Check if the session is expired (e.g., older than 7 days)
+    const sessionSavedAt = sessionStore.getSessionSavedTimestamp();
+    logger.info(`Loaded sessionSavedAt from store: ${sessionSavedAt}`);
+    if (sessionSavedAt) {
+      const savedDate = new Date(sessionSavedAt);
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      if (savedDate < sevenDaysAgo) {
+        logger.info('Session is older than 7 days, attempting to refresh...');
+        try {
+          const { data, error } = await supabase.auth.refreshSession({
+            refresh_token: session.refresh_token,
+          });
+
+          if (error) {
+            logger.error('Failed to refresh session:', error.message);
+            this.signOut(); // Clear expired session
+            return false;
+          }
+
+          if (data.session) {
+            logger.info('Session refreshed successfully');
+            this.saveSession(data.session); // Save the new session
+            this.session = data.session;
+            return true; // Indicate a valid session is present
+          }
+        } catch (refreshError) {
+          logger.error('Exception during session refresh:', refreshError);
+          this.signOut();
+          return false;
+        }
+      }
+    }
+
+    // If session is not older than 7 days, just load it
+    this.session = session;
+    logger.info('Session loaded and is valid.');
+
+    // Also load the subscription from the store
+    this.userPlan = sessionStore.loadSubscription();
+    if (this.userPlan) {
+      logger.info(`Subscription loaded from store: ${JSON.stringify(this.userPlan)}`);
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if we have a valid session
+   * @returns {Boolean} True if a valid session is initialized, false otherwise
+   */
   hasValidSession() {
     const hasSession = !!this.session;
     console.log('[DEBUG] Auth service - Has session:', hasSession);

@@ -1917,6 +1917,18 @@ const authService = new AuthService(supabase);
   // Register the complete-login handler
   // Centralized Authentication Handlers
 
+  // Handle email/password sign-in
+  ipcMain.handle('auth-signin-email', async (event, { email, password }) => {
+    try {
+      logger.info('[AUTH] Invoking email/password sign-in');
+      const success = await authService.signInWithEmailPassword(email, password);
+      return { success };
+    } catch (error) {
+      logger.error('[AUTH] Email sign-in failed:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Handle Google sign-in request from renderer
   ipcMain.handle('auth-google-signin', async () => {
     try {
@@ -1952,6 +1964,18 @@ const authService = new AuthService(supabase);
       return session;
     } catch (error) {
       logger.error('[AUTH] Failed to get session:', error);
+      return null;
+    }
+  });
+
+  // Handle get user info request from renderer
+  ipcMain.handle('auth-get-user-info', async () => {
+    try {
+      logger.info('[AUTH] Invoking auth-get-user-info');
+      const userInfo = await authService.getUserInfo();
+      return userInfo;
+    } catch (error) {
+      logger.error('[AUTH] Failed to get user info:', error);
       return null;
     }
   });
