@@ -121,6 +121,7 @@ class AuthService extends EventEmitter {
             redirect_to: 'myapp://auth-callback'  // Ensure this parameter is set
           }
         },
+        flowType: 'pkce'
       });
 
       if (error) throw error;
