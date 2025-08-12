@@ -10,6 +10,7 @@ class AuthService extends EventEmitter {
     this.supabase = supabaseClient; // Use the Supabase client passed from main process
     this.session = null;
     this.subscription = null;
+    this.oauthState = null; // Track OAuth flow state for PKCE
   }
 
   // Initialize auth service and check for existing session
@@ -124,12 +125,20 @@ class AuthService extends EventEmitter {
 
       if (error) throw error;
 
-      console.log('[AUTH] Google OAuth URL generated:', data.url);
-      
+      const authUrl = data.url;
+      console.log('[AUTH] Google OAuth URL generated:', authUrl);
+
+      // Extract and store state for later verification
+      const stateMatch = authUrl.match(/[?&]state=([^&]+)/);
+      if (stateMatch) {
+        this.oauthState = stateMatch[1];
+        console.log('[AUTH] Stored OAuth state:', this.oauthState);
+      }
+
       // Return the OAuth URL so main process can open it in system browser
       return {
         success: true,
-        authUrl: data.url
+        authUrl
       };
     } catch (error) {
       console.error('[AUTH] Google OAuth initiation failed:', error.message);
@@ -149,13 +158,22 @@ class AuthService extends EventEmitter {
       // Parse the URL to get the code and state parameters
       const url = new URL(callbackUrl);
       const code = url.searchParams.get('code');
-      
+      let state = url.searchParams.get('state');
+
       if (!code) {
         throw new Error('No authorization code received in callback');
       }
-      
+
       console.log('[AUTH] Extracted code from callback:', code.substring(0, 10) + '...');
-      
+
+      // Some platforms drop the state parameter from custom scheme URLs
+      if (!state && this.oauthState) {
+        console.log('[AUTH] No state in callback, re-attaching stored state');
+        state = this.oauthState;
+        const sep = callbackUrl.includes('?') ? '&' : '?';
+        callbackUrl = `${callbackUrl}${sep}state=${state}`;
+      }
+
       // Convert the callback URL to the format Supabase expects for hash-based URLs
       // Some versions expect fragments (#) instead of query parameters (?)
       const hashUrl = callbackUrl.replace('?', '#');
@@ -214,7 +232,10 @@ class AuthService extends EventEmitter {
       
       // Emit auth success event
       this.emit('auth-success', this.session);
-      
+
+      // Clear stored OAuth state now that flow is complete
+      this.oauthState = null;
+
       return { success: true, session: this.session };
     } catch (error) {
       console.error('[AUTH] Error handling deep link callback:', error);
