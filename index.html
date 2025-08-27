@@ -251,9 +251,33 @@
             </div>
 
         </div>
+
+        <!-- App Update Notification -->
+        <div class="update-notification" id="updateNotification">
+            <div class="update-content">
+                <div class="update-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
+                    </svg>
+                </div>
+                <div class="update-text">
+                    <div class="update-title" id="updateTitle">New Update Available!</div>
+                    <div class="update-message" id="updateMessage">A new version has been downloaded and is ready to install.</div>
+                    <div class="update-progress" id="updateProgress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="updateProgressFill"></div>
+                        </div>
+                        <div class="progress-text" id="updateProgressText">Downloading... 0%</div>
+                    </div>
+                </div>
+                <div class="update-actions">
+                    <button class="update-btn update-btn-secondary" id="updateLaterBtn">Later</button>
+                    <button class="update-btn update-btn-primary" id="updateRestartBtn">Restart & Update</button>
+                </div>
+            </div>
+            <button class="update-close-btn" id="updateCloseBtn" title="Close">×</button>
+        </div>
     </div>
-
-
 
     <script>
         // Constants from constants.js - updated for dynamic sizing
@@ -1113,9 +1137,9 @@
         async function checkExistingSession() {
             try {
                 console.log('[UI] Checking for existing session...');
-                const session = await window.auth.getSession();
+                const result = await window.auth.getSession();
                 
-                if (session) {
+                if (result.session && !result.error) {
                     console.log('[UI] Valid session found, updating UI state');
                     isLoggedIn = true;
                     
@@ -1131,7 +1155,7 @@
                         console.warn('[UI] Could not load user info:', userInfoError);
                     }
                 } else {
-                    console.log('[UI] No valid session found');
+                    console.log('[UI] No valid session found', result.error ? `(Error: ${result.error.message})` : '');
                     isLoggedIn = false;
                     currentUser = null;
                     userPlan = null;
@@ -1147,8 +1171,18 @@
             }
         }
         
-        // Initialize login state
-        checkExistingSession();
+        // Initialize login state after auth is ready
+        function initializeAuth() {
+            if (window.auth) {
+                checkExistingSession();
+                // setupAuthCallbacks(); // Moved to after renderer-auth.js loads
+            } else {
+                // Wait for auth to be available
+                setTimeout(initializeAuth, 100);
+            }
+        }
+        
+        initializeAuth();
 
         // Authentication functionality
         const authContainer = document.getElementById('authContainer');
@@ -1221,12 +1255,12 @@
             
             try {
                 // Use the auth API from preload.js
-                const result = await window.auth.signInWithEmail(email, password);
+                const result = await window.auth.signInWithEmailPassword(email, password);
                 
                 if (!result.success) {
                      showAuthStatus(result.error || 'Sign in failed', true);
                  } else {
-                     showAuthStatus('Sign in successful!', false);
+                     showAuthStatus('Email sign-in successful!', false);
                      
                      // Set logged in state and update UI
                      isLoggedIn = true;
@@ -1269,18 +1303,65 @@
             }
         }
 
+        // Helper function to wait for window.auth to be available
+        async function waitForAuth(maxAttempts = 10) {
+            for (let i = 0; i < maxAttempts; i++) {
+                if (window.auth && typeof window.auth.handleAuthCallback === 'function') {
+                    return window.auth;
+                }
+                console.log(`[UI] Waiting for window.auth... attempt ${i + 1}/${maxAttempts}`);
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            throw new Error('window.auth.handleAuthCallback not available after waiting');
+        }
+
         // Handle auth callback from deep link - use renderer auth
         function setupAuthCallbackHandler() {
             window.electron.on('auth:callback-url', async (callbackUrl) => {
                 console.log('[UI] Received auth callback:', callbackUrl);
                 
+                // Debug: Check what's available immediately
+                console.log('[UI] Debug - window.auth exists:', !!window.auth);
+                console.log('[UI] Debug - window.auth type:', typeof window.auth);
+                if (window.auth) {
+                    console.log('[UI] Debug - handleAuthCallback exists:', !!window.auth.handleAuthCallback);
+                    console.log('[UI] Debug - handleAuthCallback type:', typeof window.auth.handleAuthCallback);
+                    console.log('[UI] Debug - Available auth methods:', Object.keys(window.auth));
+                }
+                
                 try {
+                    // Wait for window.auth to be available with retry mechanism
+                    const auth = await waitForAuth();
+                    
                     // Use renderer auth to handle the callback
-                    const result = await window.auth.handleAuthCallback(callbackUrl);
+                    const result = await auth.handleAuthCallback(callbackUrl);
                     
                     if (result.session) {
-                        console.log('[UI] Google auth successful:', result.session.user.email);
-                        showAuthStatus('Google sign-in successful!');
+                        console.log('[UI] OAuth auth successful:', result.session.user.email);
+                        
+                        // Determine the provider from session data
+                        const provider = result.session.user?.app_metadata?.provider || 'Google';
+                        const providerName = provider === 'google' ? 'Google' : provider;
+                        showAuthStatus(`${providerName} sign-in successful!`);
+                        
+                        // Set logged in state
+                        isLoggedIn = true;
+                        
+                        // Extract user info from session data
+                        currentUser = result.session.user;
+                        console.log(`[UI] ${providerName} user info loaded:`, currentUser.email);
+                        
+                        // Get user info and plan (same as email/password flow)
+                        try {
+                            const userInfo = await window.auth.getUserInfo();
+                            if (userInfo && userInfo.user) {
+                                currentUser = userInfo.user;
+                                userPlan = userInfo.plan;
+                                console.log('[UI] User info loaded:', currentUser.email, 'Plan:', userPlan?.plan_type, 'Interviews Left:', userPlan?.interviews_remaining);
+                            }
+                        } catch (userInfoError) {
+                            console.warn('[UI] Could not load user info:', userInfoError);
+                        }
                         
                         // Update login state and hide auth container after a short delay
                         setTimeout(() => {
@@ -1288,74 +1369,30 @@
                             hideAuthContainer();
                         }, 1500);
                     } else {
-                        console.error('[UI] Google auth failed:', result.error);
-                        showAuthStatus('Google sign-in failed: ' + result.error.message, true);
+                        console.error('[UI] OAuth auth failed:', result.error);
+                        const errorMessage = result.error?.message || result.error || 'Authentication failed';
+                        showAuthStatus('OAuth sign-in failed: ' + errorMessage, true);
                         resetGoogleButton();
                     }
                 } catch (error) {
                     console.error('[UI] Error handling auth callback:', error);
-                    showAuthStatus('Google sign-in failed: ' + error.message, true);
+                    const errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
+                    showAuthStatus('OAuth sign-in failed: ' + errorMessage, true);
                     resetGoogleButton();
                 }
             });
         }
 
-        // Set up the callback handler
-        setupAuthCallbackHandler();
-
-        // Set up auth success listener for Google OAuth
-        window.auth.onAuthSuccess(async (sessionData) => {
-            console.log('[UI] Auth success event received:', sessionData);
-            showAuthStatus('Google sign-in successful!');
+        function setupAuthCallbacks() {
+            // Set up the callback handler
+            setupAuthCallbackHandler();
             
-            try {
-                // Set logged in state
-                isLoggedIn = true;
-                
-                // Extract user info from session data
-                if (sessionData && sessionData.user) {
-                    currentUser = sessionData.user;
-                    console.log('[UI] Google user info loaded:', currentUser.email);
-                    
-                    // Try to get additional user info (plan details) if getUserInfo is available
-                    if (window.auth.getUserInfo) {
-                        try {
-                            const userInfo = await window.auth.getUserInfo();
-                            if (userInfo && userInfo.user) {
-                                currentUser = userInfo.user;
-                                userPlan = userInfo.plan;
-                                console.log('[UI] Extended user info loaded:', currentUser.email, 'Plan:', userPlan?.plan_type);
-                            }
-                        } catch (userInfoError) {
-                            console.warn('[UI] Could not load extended user info:', userInfoError);
-                        }
-                    }
-                } else {
-                    console.warn('[UI] No user data in session');
-                }
-                
-                // Update the UI immediately
-                updateLoginState();
-                
-                // Hide auth container after a short delay
-                setTimeout(() => {
-                    hideAuthContainer();
-                    resetGoogleButton();
-                }, 1500);
-                
-            } catch (error) {
-                console.error('[UI] Error processing auth success:', error);
-                showAuthStatus('Authentication succeeded but failed to update UI', true);
-                resetGoogleButton();
-            }
-        });
-
-        // Set up auth error listener
-        window.auth.onAuthError((errorData) => {
-            console.error('[UI] Auth error event received:', errorData);
-            showAuthStatus('Authentication failed: ' + errorData.message, true);
-            resetGoogleButton();
-        });
+            // Note: The onAuthSuccess and onAuthError methods don't exist in renderer-auth.js
+            // Authentication success/error handling is done directly in each authentication flow:
+            // 1. Email/password: handled in email form submit handler
+            // 2. Google OAuth: handled in setupAuthCallbackHandler function
+            console.log('[UI] Auth callbacks initialized');
+        }
 
         // Close auth container when clicking outside
         authContainer.addEventListener('click', (e) => {
@@ -1803,34 +1840,40 @@
         // Listen for AI suggestion responses
         if (window.electron && window.electron.onSuggestion) {
             window.electron.onSuggestion((data) => {
-                console.log('[UI] Received AI suggestion:', data);
+                console.log('🎯 [UI] Received AI suggestion:', data);
                 const suggestionText = data.text || 'No suggestion available.';
                 addSuggestionMessage(suggestionText, data.isFinal, data.source);
             });
+        } else {
+            console.warn('🚨 [UI] window.electron.onSuggestion not available');
         }
 
         // Listen for streaming AI suggestion chunks
         if (window.electron && window.electron.onSuggestionChunk) {
             window.electron.onSuggestionChunk((data) => {
-                console.log('[UI] Received AI suggestion chunk:', data);
+                console.log('🎯 [UI] Received AI suggestion chunk:', data);
                 const suggestionText = data.fullText || '';
                 addSuggestionMessage(suggestionText, data.isFinal, data.source);
             });
+        } else {
+            console.warn('🚨 [UI] window.electron.onSuggestionChunk not available');
         }
 
         // Listen for streaming AI suggestion partial results
         if (window.electron && window.electron.onSuggestionPartial) {
             window.electron.onSuggestionPartial((data) => {
-                console.log('[UI] Received AI suggestion partial:', data);
+                console.log('🎯 [UI] Received AI suggestion partial:', data);
                 const suggestionText = data.fullText || '';
                 addSuggestionMessage(suggestionText, data.isFinal, data.source);
             });
+        } else {
+            console.warn('🚨 [UI] window.electron.onSuggestionPartial not available');
         }
 
         // Listen for suggestion processing events (progress indicator)
         if (window.electron && window.electron.onSuggestionProcessing) {
             window.electron.onSuggestionProcessing((data) => {
-                console.log('[UI] AI suggestion processing started:', data);
+                console.log('🎯 [UI] AI suggestion processing started:', data);
                 
                 // Show progress indicator in AI card
                 const aiCardContent = document.getElementById('aiCardContent');
@@ -2070,8 +2113,14 @@
     </script>
 
     <script src="./renderer-auth.js"></script>
+    <script src="./renderer-ui.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
+            // Set up auth callbacks now that renderer-auth.js has loaded
+            if (typeof setupAuthCallbacks === 'function') {
+                setupAuthCallbacks();
+            }
+            
             const authForm = document.getElementById('authForm');
             if(authForm) {
                 authForm.addEventListener('submit', async (e) => {
@@ -2102,7 +2151,8 @@
                             showAuthStatus('Check your browser to complete sign-in');
                             // The callback will be handled by the auth success listener
                         } else {
-                            showAuthStatus('Failed to start Google sign-in: ' + result.error, true);
+                            const errorMessage = result.error?.message || result.error || 'Unknown error';
+                            showAuthStatus('Failed to start Google sign-in: ' + errorMessage, true);
                             resetGoogleButton();
                         }
                     } catch (error) {
@@ -2126,10 +2176,266 @@
                 `;
             }
 
-            window.electron.on('auth:callback-url', (url) => {
-                window.auth.handleAuthCallback(url);
-            });
+            // Removed duplicate auth callback handler - handled in setupAuthCallbackHandler() instead
         });
+
+        // ===== APP UPDATE NOTIFICATION SYSTEM =====
+        const updateNotification = document.getElementById('updateNotification');
+        const updateTitle = document.getElementById('updateTitle');
+        const updateMessage = document.getElementById('updateMessage');
+        const updateProgress = document.getElementById('updateProgress');
+        const updateProgressFill = document.getElementById('updateProgressFill');
+        const updateProgressText = document.getElementById('updateProgressText');
+        const updateLaterBtn = document.getElementById('updateLaterBtn');
+        const updateRestartBtn = document.getElementById('updateRestartBtn');
+        const updateCloseBtn = document.getElementById('updateCloseBtn');
+
+        let updateState = {
+            isVisible: false,
+            isDownloading: false,
+            isDownloaded: false,
+            progress: 0,
+            updateInfo: null
+        };
+
+        // Show update notification with animation
+        function showUpdateNotification() {
+            if (updateState.isVisible) return;
+            
+            updateState.isVisible = true;
+            updateNotification.classList.add('show');
+            
+            // Update window size to accommodate notification
+            updateWindowSize();
+        }
+
+        // Hide update notification with animation
+        function hideUpdateNotification() {
+            if (!updateState.isVisible) return;
+            
+            updateState.isVisible = false;
+            updateNotification.classList.remove('show');
+            
+            // Update window size after hiding notification
+            updateWindowSize();
+        }
+
+        // Update the notification UI based on state
+        function updateNotificationUI() {
+            if (updateState.isDownloading) {
+                updateTitle.textContent = 'Downloading Update...';
+                updateMessage.textContent = 'A new version is being downloaded. Please wait.';
+                updateProgress.style.display = 'block';
+                updateProgressFill.style.width = updateState.progress + '%';
+                updateProgressText.textContent = `Downloading... ${Math.round(updateState.progress)}%`;
+                updateRestartBtn.textContent = 'Downloading...';
+                updateRestartBtn.disabled = true;
+            } else if (updateState.isDownloaded) {
+                updateTitle.textContent = 'Update Ready!';
+                updateMessage.textContent = 'A new version has been downloaded and is ready to install. Restart the app to complete the update.';
+                updateProgress.style.display = 'none';
+                updateRestartBtn.textContent = 'Restart & Update';
+                updateRestartBtn.disabled = false;
+            } else {
+                updateTitle.textContent = 'New Update Available!';
+                updateMessage.textContent = 'A new version is available. Would you like to download it now?';
+                updateProgress.style.display = 'none';
+                updateRestartBtn.textContent = 'Download & Install';
+                updateRestartBtn.disabled = false;
+            }
+        }
+
+        // Handle "Later" button click
+        updateLaterBtn.addEventListener('click', () => {
+            hideUpdateNotification();
+            // Remind user again in 1 hour
+            setTimeout(() => {
+                if (updateState.isDownloaded) {
+                    showUpdateNotification();
+                }
+            }, 60 * 60 * 1000); // 1 hour
+        });
+
+        // Handle "Restart & Update" button click
+        updateRestartBtn.addEventListener('click', () => {
+            if (updateState.isDownloaded) {
+                // Trigger app restart to install update
+                if (window.electron && window.electron.restartAndInstallUpdate) {
+                    window.electron.restartAndInstallUpdate();
+                }
+            } else if (updateState.isDownloading) {
+                // Do nothing while downloading
+                return;
+            } else {
+                // Start download
+                if (window.electron && window.electron.downloadUpdate) {
+                    window.electron.downloadUpdate();
+                }
+            }
+        });
+
+        // Handle close button click
+        updateCloseBtn.addEventListener('click', () => {
+            hideUpdateNotification();
+        });
+
+        // Listen for update events from main process
+        if (window.electron) {
+            // Update available
+            window.electron.onUpdateAvailable((info) => {
+                console.log('[UPDATE] Update available:', info);
+                updateState.updateInfo = info;
+                updateState.isDownloading = false;
+                updateState.isDownloaded = false;
+                updateState.progress = 0;
+                updateNotificationUI();
+                showUpdateNotification();
+            });
+
+            // Update not available
+            window.electron.onUpdateNotAvailable(() => {
+                console.log('[UPDATE] No updates available');
+                hideUpdateNotification();
+            });
+
+            // Download progress
+            window.electron.onDownloadProgress((progressInfo) => {
+                console.log('[UPDATE] Download progress:', progressInfo);
+                updateState.isDownloading = true;
+                updateState.isDownloaded = false;
+                updateState.progress = progressInfo.percent || 0;
+                updateNotificationUI();
+                
+                if (!updateState.isVisible) {
+                    showUpdateNotification();
+                }
+            });
+
+            // Update downloaded
+            window.electron.onUpdateDownloaded((info) => {
+                console.log('[UPDATE] Update downloaded:', info);
+                updateState.isDownloading = false;
+                updateState.isDownloaded = true;
+                updateState.progress = 100;
+                updateNotificationUI();
+                
+                if (!updateState.isVisible) {
+                    showUpdateNotification();
+                }
+                
+                // Show a more prominent notification
+                updateTitle.textContent = '✨ Update Ready!';
+            });
+
+            // Update error
+            window.electron.onUpdateError((error) => {
+                console.error('[UPDATE] Update error:', error);
+                updateState.isDownloading = false;
+                updateState.isDownloaded = false;
+                updateTitle.textContent = 'Update Failed';
+                updateMessage.textContent = 'Failed to download the update. Please try again later.';
+                updateProgress.style.display = 'none';
+                updateRestartBtn.textContent = 'Retry';
+                updateRestartBtn.disabled = false;
+                
+                if (!updateState.isVisible) {
+                    showUpdateNotification();
+                }
+                
+                // Hide after 10 seconds on error
+                setTimeout(() => {
+                    hideUpdateNotification();
+                }, 10000);
+            });
+        }
+
+        console.log('[UPDATE] Update notification system initialized');
+
+        // ===== DEVELOPMENT TESTING HELPERS =====
+        // Add global functions for testing update UI in development
+        if (!window.electron || !app.isPackaged) {
+            console.log('[UPDATE] Adding development testing functions');
+            
+            window.testUpdateUI = {
+                // Simulate update available
+                showUpdateAvailable: () => {
+                    const mockInfo = {
+                        version: '1.2.0',
+                        releaseDate: new Date().toISOString(),
+                        releaseName: 'Test Release',
+                        releaseNotes: 'This is a test update for development'
+                    };
+                    updateState.updateInfo = mockInfo;
+                    updateState.isDownloading = false;
+                    updateState.isDownloaded = false;
+                    updateState.progress = 0;
+                    updateNotificationUI();
+                    showUpdateNotification();
+                    console.log('[UPDATE TEST] Simulated update available');
+                },
+                
+                // Simulate download progress
+                simulateDownload: () => {
+                    updateState.isDownloading = true;
+                    updateState.isDownloaded = false;
+                    updateNotificationUI();
+                    showUpdateNotification();
+                    
+                    let progress = 0;
+                    const interval = setInterval(() => {
+                        progress += Math.random() * 15;
+                        if (progress >= 100) {
+                            progress = 100;
+                            clearInterval(interval);
+                            setTimeout(() => {
+                                window.testUpdateUI.showUpdateDownloaded();
+                            }, 500);
+                        }
+                        
+                        updateState.progress = progress;
+                        updateNotificationUI();
+                        console.log(`[UPDATE TEST] Download progress: ${Math.round(progress)}%`);
+                    }, 300);
+                },
+                
+                // Simulate download completed
+                showUpdateDownloaded: () => {
+                    updateState.isDownloading = false;
+                    updateState.isDownloaded = true;
+                    updateState.progress = 100;
+                    updateNotificationUI();
+                    showUpdateNotification();
+                    updateTitle.textContent = '✨ Update Ready!';
+                    console.log('[UPDATE TEST] Simulated update downloaded');
+                },
+                
+                // Simulate update error
+                showUpdateError: () => {
+                    updateState.isDownloading = false;
+                    updateState.isDownloaded = false;
+                    updateTitle.textContent = 'Update Failed';
+                    updateMessage.textContent = 'Failed to download the update. Please try again later.';
+                    updateProgress.style.display = 'none';
+                    updateRestartBtn.textContent = 'Retry';
+                    updateRestartBtn.disabled = false;
+                    showUpdateNotification();
+                    console.log('[UPDATE TEST] Simulated update error');
+                },
+                
+                // Hide notification
+                hide: () => {
+                    hideUpdateNotification();
+                    console.log('[UPDATE TEST] Hidden update notification');
+                }
+            };
+            
+            console.log('[UPDATE] Development testing functions available:');
+            console.log('- testUpdateUI.showUpdateAvailable() - Show update available notification');
+            console.log('- testUpdateUI.simulateDownload() - Simulate download with progress');
+            console.log('- testUpdateUI.showUpdateDownloaded() - Show update ready notification');
+            console.log('- testUpdateUI.showUpdateError() - Show update error notification');
+            console.log('- testUpdateUI.hide() - Hide notification');
+        }
     </script>
 </body>
 </html>

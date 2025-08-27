@@ -2,9 +2,66 @@
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
+const { spawn } = require('child_process');
+
+// Add server exit logging
+process.on('exit', (code) => console.log('[server] exiting code=', code));
+
+// Robust AudioCapture path resolver
+function resolveAudioCapturePath() {
+  // Where Electron copies things at runtime
+  const resources = process.resourcesPath || '';
+  const here = __dirname; // dev = project/src dir; prod = .../Resources/app[/asar]
+
+  const candidates = [
+    // ✅ Your current packaged layout (extraResources -> bin/AudioCapture)
+    path.join(resources, 'bin', 'AudioCapture'),
+
+    // If you ever unpack under asar.unpacked/bin/…
+    path.join(resources, 'app.asar.unpacked', 'bin', 'AudioCapture'),
+
+    // If you include it inside app/ when asar=false
+    path.join(resources, 'app', 'bin', 'AudioCapture'),
+
+    // Dev & local runs
+    path.join(here, 'bin', 'AudioCapture'),
+    path.join(here, '..', 'bin', 'AudioCapture'),
+  ];
+
+  const found = candidates.find(p => p && fs.existsSync(p));
+  if (!found) {
+    const msg = `[AUDIO] AudioCapture not found. Tried:\n${candidates.join('\n')}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+  return found;
+}
+
+function spawnAudioCapture(args = [], options = {}) {
+  const bin = resolveAudioCapturePath();
+  // Ensure exec bit—just in case perms were lost on copy (no-op if already executable)
+  try { fs.chmodSync(bin, 0o755); } catch {}
+
+  const env = { ...process.env }; // add anything you need
+  const defaultOptions = {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  };
+  const finalOptions = { ...defaultOptions, ...options };
+  
+  const child = spawn(bin, args, finalOptions);
+
+  child.stdout?.on('data', d => console.log(`[AudioCapture stdout] ${String(d).trim()}`));
+  child.stderr?.on('data', d => console.error(`[AudioCapture stderr] ${String(d).trim()}`));
+  child.on('error', err => console.error('[AudioCapture spawn error]', err));
+  child.on('exit', (code, sig) => console.log('[AudioCapture exit]', { code, sig }));
+
+  return child;
+}
+
 const envCandidates = [
   path.join(__dirname, '.env.production'),               // inside asar (mac build)
-  path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
+  ...(process.resourcesPath ? [path.join(process.resourcesPath, '.env.production')] : []),   // alongside resources (win build)
 ];
 for (const p of envCandidates) {
   if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
@@ -51,7 +108,6 @@ function convertFloat32ToLinear16(float32Buffer) {
 }
 
 const {Writable} = require('stream');
-const { spawn } = require('child_process');
 const os = require('os');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
@@ -390,18 +446,13 @@ function startSwiftProcess() {
   const startTime = Date.now();
   // console.log('⏱️ [LATENCY] Starting Swift audio process...');
   
-  const swiftToolPath = process.env.NODE_ENV === 'production'
-    ? path.join(process.resourcesPath, 'bin', 'AudioCapture')
-    : path.join(__dirname, 'bin', 'AudioCapture');
-  
-  const spawnStartTime = Date.now();
-  swiftAudioProcess = spawn(swiftToolPath, [], {
-    stdio: 'pipe'
-  });
-  const spawnDuration = Date.now() - spawnStartTime;
-  console.log(`⏱️ [LATENCY] Swift process spawn took: ${spawnDuration}ms`);
-  
-  swiftAudioProcess.on('error', (err) => {
+  try {
+    const spawnStartTime = Date.now();
+    swiftAudioProcess = spawnAudioCapture([], { stdio: 'pipe' });
+    const spawnDuration = Date.now() - spawnStartTime;
+    console.log(`⏱️ [LATENCY] Swift process spawn took: ${spawnDuration}ms`);
+    
+    swiftAudioProcess.on('error', (err) => {
     console.error('Swift audio process error:', err);
     process.send({ type: 'error', data: { message: `Swift audio capture error: ${err.message}` } });
     
@@ -508,8 +559,12 @@ function startSwiftProcess() {
     }
   });
 
-  // Start the speech recognition stream immediately as pipes are no longer used
-  startStream();
+    // Start the speech recognition stream immediately as pipes are no longer used
+    startStream();
+  } catch (error) {
+    console.error('[AudioCapture] Failed to spawn Swift process:', error);
+    process.send({ type: 'error', data: { message: `Failed to start audio capture: ${error.message}` } });
+  }
 }
 
 
@@ -854,6 +909,22 @@ process.on('message', async (message) => { // Make handler async
     if (dualStreamManager) {
       dualStreamManager.enableMicOnlyMode();
     }
+  } else if (message.type === 'windows-audio-capture-success') {
+    // Handle Windows Web API audio capture success
+    console.log('✅ [SERVER] Windows audio capture started successfully');
+    // Send recording status update to confirm capture is active
+    process.send({ 
+      type: 'recording-status', 
+      data: { isRecording: true, platform: 'windows', captureMethod: 'WebAPI' } 
+    });
+  } else if (message.type === 'windows-audio-capture-error') {
+    // Handle Windows Web API audio capture error
+    console.error('❌ [SERVER] Windows audio capture failed:', message.data);
+    // Send recording failed status
+    process.send({ 
+      type: 'recording-failed', 
+      reason: `Windows audio capture failed: ${message.data?.message || 'Unknown error'}` 
+    });
   } else if (message.type === 'retrieve-context') {
     // Skip context retrieval if interview is already in progress
     if (isRecording) {
@@ -1377,7 +1448,7 @@ async function initializeChat() {
 const candidatePaths = [
   path.join(__dirname, 'system_prompt.txt'),             // current directory
   path.join(process.cwd(), 'system_prompt.txt'),         // working directory
-  path.join(process.resourcesPath || '', 'system_prompt.txt') // packaged app resources
+  ...(process.resourcesPath ? [path.join(process.resourcesPath, 'system_prompt.txt')] : []) // packaged app resources
 ];
 
 let systemPrompt = '';
@@ -2853,7 +2924,7 @@ function detectCodeLanguage(code) {
 }
 
 // Smart cropping function to focus on relevant UI elements
-async function smartCropImage(sharpInstance, width, height) {
+async function smartCropImage(jimpInstance, width, height) {
   const cropStartTime = Date.now();
   const CROP_TIMEOUT = 1000; // 1 second timeout
   
@@ -2861,7 +2932,11 @@ async function smartCropImage(sharpInstance, width, height) {
     // Add timeout wrapper
     const cropPromise = (async () => {
       // Convert to grayscale for edge detection
-      const grayBuffer = await sharpInstance.clone().grayscale().raw().toBuffer();
+      const grayJimp = await jimpInstance.clone().greyscale();
+      const grayBuffer = new Uint8Array(width * height);
+      grayJimp.scan(0, 0, width, height, (x, y, idx) => {
+        grayBuffer[y * width + x] = grayJimp.bitmap.data[idx]; // R channel since greyscale
+      });
       
       // Analyze image for UI elements using simple heuristics
       const cropRegions = await detectUIElements(grayBuffer, width, height);
@@ -2872,25 +2947,18 @@ async function smartCropImage(sharpInstance, width, height) {
         
         if (bestRegion) {
           // Apply the crop
-          const croppedBuffer = await sharpInstance
-            .extract({
-              left: bestRegion.left,
-              top: bestRegion.top,
-              width: bestRegion.width,
-              height: bestRegion.height
-            })
-            .toBuffer();
+          const cropped = jimpInstance.clone().crop(bestRegion.left, bestRegion.top, bestRegion.width, bestRegion.height);
           
           return {
             cropped: true,
-            buffer: croppedBuffer,
+            jimpInstance: cropped,
             description: `${bestRegion.type} region (${bestRegion.width}x${bestRegion.height}) in ${Date.now() - cropStartTime}ms`
           };
         }
       }
       
       // No suitable crop region found, return original
-      return { cropped: false, buffer: await sharpInstance.toBuffer() };
+      return { cropped: false, jimpInstance };
     })();
     
     // Race between crop operation and timeout
@@ -2903,7 +2971,7 @@ async function smartCropImage(sharpInstance, width, height) {
   } catch (error) {
     const elapsed = Date.now() - cropStartTime;
     console.log(`[PERF] Smart crop ${error.message === 'Crop timeout' ? 'timed out' : 'failed'} after ${elapsed}ms, using original image`);
-    return { cropped: false, buffer: await sharpInstance.toBuffer() };
+    return { cropped: false, jimpInstance };
   }
 }
 
@@ -3034,26 +3102,27 @@ async function processScreenshot(screenshotPath) {
     
     // Smart cropping and compression for faster Gemini processing
     const processStartTime = Date.now();
-    const sharp = require('sharp');
+    const Jimp = require('jimp');
     
     // Get image metadata for smart cropping
-    const imageInfo = await sharp(fileBuffer).metadata();
-    const { width, height } = imageInfo;
+    const jimpImage = await Jimp.read(fileBuffer);
+    const width = jimpImage.bitmap.width;
+    const height = jimpImage.bitmap.height;
     console.log(`[PERF] Original image dimensions: ${width}x${height}`);
     
     // Apply smart cropping to focus on relevant UI elements
-    let processedBuffer = fileBuffer;
-    const cropResult = await smartCropImage(sharp(fileBuffer), width, height);
+    let jimpProcessed = jimpImage;
+    const cropResult = await smartCropImage(jimpImage.clone(), width, height);
     if (cropResult.cropped) {
-      processedBuffer = cropResult.buffer;
+      jimpProcessed = cropResult.jimpInstance;
       console.log(`[PERF] Smart crop applied: ${cropResult.description}`);
     }
     
     // Compress the processed image
-    const compressedBuffer = await sharp(processedBuffer)
-      .resize(1920, 1080, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+    const compressedBuffer = await jimpProcessed.clone()
+      .resize(1920, 1080, Jimp.RESIZE_BILINEAR)
+      .quality(85)
+      .getBufferAsync(Jimp.MIME_JPEG);
     const processTime = Date.now() - processStartTime;
     console.log(`[PERF] Image processing took: ${processTime}ms (${fileBuffer.length} -> ${compressedBuffer.length} bytes, ${Math.round((1 - compressedBuffer.length/fileBuffer.length) * 100)}% reduction)`);
     
@@ -3428,30 +3497,10 @@ let audioPreInitialized = false;
 
 // Function to request permissions interactively
 function requestPermissionsInteractively(permissionType) {
-  let swiftToolPath;
-  if (process.env.NODE_ENV === 'production') {
-    if (process.platform === 'darwin') {
-      // macOS: AudioCapture is in extraResources
-      swiftToolPath = path.join(process.resourcesPath, 'bin', 'AudioCapture');
-    } else {
-      // Windows: AudioCapture is in extraResources
-      swiftToolPath = path.join(path.dirname(process.execPath), 'resources', 'bin', 'AudioCapture');
-    }
-  } else {
-    swiftToolPath = path.join(__dirname, 'bin', 'AudioCapture');
-  }
-
-  if (!fs.existsSync(swiftToolPath)) {
-    console.error('Swift audio capture tool not found for permission request');
-    sendPermissionError(permissionType, 'tool-not-found');
-    return;
-  }
-
   console.log(`🔄 Requesting ${permissionType} permissions interactively...`);
   
   try {
-    const { spawn } = require('child_process');
-    const permissionRequestProcess = spawn(swiftToolPath, ['--request-permissions']);
+    const permissionRequestProcess = spawnAudioCapture(['--request-permissions']);
 
     permissionRequestProcess.stdout.on('data', (data) => {
       console.log(`[Swift Permission Request]: ${data}`);
@@ -3527,67 +3576,43 @@ async function preInitializeAudioCapture() {
     // Shared memory support removed
     
     // Pre-spawn the Swift process but don't start capture yet
-    let swiftToolPath;
-    if (process.env.NODE_ENV === 'production') {
-      if (process.platform === 'darwin') {
-        // macOS: AudioCapture is in extraResources
-        swiftToolPath = path.join(process.resourcesPath, 'bin', 'AudioCapture');
+    // console.log('✅ Swift audio capture tool found. Checking permissions...');
+    const permissionCheckProcess = spawnAudioCapture(['--permission-check']);
+
+    let swiftOutput = '';
+    permissionCheckProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      swiftOutput += output;
+      console.log(`[Swift Permission Check]: ${output}`);
+    });
+
+    permissionCheckProcess.stderr.on('data', (data) => {
+      console.error(`[Swift Permission Check Error]: ${data}`);
+    });
+
+    permissionCheckProcess.on('close', (code) => {
+      console.log(`Swift permission check process exited with code ${code}`);
+
+      const micDenied = swiftOutput.includes('🎤 Microphone: ❌ Not Available');
+      const screenDenied = swiftOutput.includes('🖥️  Screen Recording: ❌ Not Available');
+
+      if (micDenied) {
+        console.error('❌ Microphone permission is required but not granted.');
+        requestPermissionsInteractively('microphone');
+      } else if (screenDenied) {
+        console.error('❌ Screen recording permission is required but not granted.');
+        requestPermissionsInteractively('screen-recording');
+      } else if (code !== 0) {
+        console.warn('⚠️ Swift audio permission check failed with unexpected error.');
+        requestPermissionsInteractively('all');
       } else {
-        // Windows: AudioCapture is in extraResources
-        swiftToolPath = path.join(path.dirname(process.execPath), 'resources', 'bin', 'AudioCapture');
+        console.log('✅ All required permissions are available.');
       }
-    } else {
-      swiftToolPath = path.join(__dirname, 'bin', 'AudioCapture');
-    }
-    
-    // Just verify the tool exists and is executable, then run permission check
-    if (fs.existsSync(swiftToolPath)) {
-      // console.log('✅ Swift audio capture tool found. Checking permissions...');
-      try {
-        const { spawn } = require('child_process');
-        const permissionCheckProcess = spawn(swiftToolPath, ['--permission-check']);
 
-        let swiftOutput = '';
-        permissionCheckProcess.stdout.on('data', (data) => {
-          const output = data.toString();
-          swiftOutput += output;
-          console.log(`[Swift Permission Check]: ${output}`);
-        });
-
-        permissionCheckProcess.stderr.on('data', (data) => {
-          console.error(`[Swift Permission Check Error]: ${data}`);
-        });
-
-        permissionCheckProcess.on('close', (code) => {
-          console.log(`Swift permission check process exited with code ${code}`);
-
-          const micDenied = swiftOutput.includes('🎤 Microphone: ❌ Not Available');
-          const screenDenied = swiftOutput.includes('🖥️  Screen Recording: ❌ Not Available');
-
-          if (micDenied) {
-            console.error('❌ Microphone permission is required but not granted.');
-            requestPermissionsInteractively('microphone');
-          } else if (screenDenied) {
-            console.error('❌ Screen recording permission is required but not granted.');
-            requestPermissionsInteractively('screen-recording');
-          } else if (code !== 0) {
-            console.warn('⚠️ Swift audio permission check failed with unexpected error.');
-            requestPermissionsInteractively('all');
-          } else {
-            console.log('✅ All required permissions are available.');
-          }
-
-          audioPreInitialized = true;
-          const preInitDuration = Date.now() - preInitStartTime;
-          // console.log(`⏱️ [LATENCY] Audio pre-initialization and permission check took: ${preInitDuration}ms`);
-        });
-      } catch (permError) {
-        console.error('Error spawning Swift for permission check:', permError);
-        useSwiftAudioCapture = true; // Fallback if permission check itself fails
-      }
-    } else {
-      useSwiftAudioCapture = true;
-    }
+      audioPreInitialized = true;
+      const preInitDuration = Date.now() - preInitStartTime;
+      // console.log(`⏱️ [LATENCY] Audio pre-initialization and permission check took: ${preInitDuration}ms`);
+    });
   } catch (error) {
     console.error('Failed to pre-initialize audio capture:', error);
     // console.log('Will initialize audio capture on demand');

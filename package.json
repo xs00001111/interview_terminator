@@ -1,6 +1,6 @@
 {
   "name": "interview_terminator",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "type": "commonjs",
   "main": "main.js",
   "scripts": {
@@ -16,7 +16,20 @@
     "build:win": "electron-builder --win",
     "build:all": "electron-builder --mac --win",
     "dist:win": "electron-builder --win",
-    "build:swift-system-audio": "(cd swift-audio-capture && swift build --configuration release --arch arm64 --arch x86_64) && lipo -create -output ./bin/AudioCapture ./swift-audio-capture/.build/arm64-apple-macosx/release/swift-audio-capture ./swift-audio-capture/.build/x86_64-apple-macosx/release/swift-audio-capture"
+    "build:swift-system-audio": "(cd swift-audio-capture && swift build --configuration release --arch arm64 --arch x86_64) && lipo -create -output ./bin/AudioCapture ./swift-audio-capture/.build/arm64-apple-macosx/release/swift-audio-capture ./swift-audio-capture/.build/x86_64-apple-macosx/release/swift-audio-capture",
+    "mac:dir:x64": "electron-builder --mac dir --x64 --config.mac.identity=null",
+    "mac:dir:arm64": "electron-builder --mac dir --arm64 --config.mac.identity=null",
+    "mac:dir:x64:unsigned": "electron-builder --mac dir --x64 --config.mac.identity=null",
+    "mac:dir:arm64:unsigned": "electron-builder --mac dir --arm64 --config.mac.identity=null",
+    "merge:universal": "node scripts/make-universal.js",
+    "sign:website": "electron-osx-sign dist/universal/Interview-Terminator.app --identity='Developer ID Application: Xin Shen (8Q3VHHBNHM)' --hardened-runtime=true --entitlements=build/entitlements.mac.plist --entitlements-inherit=build/entitlements.mac.plist",
+    "notarize:website": "xcrun notarytool submit 'dist/universal/Interview-Terminator.app' --keychain-profile AC_NOTARY --wait",
+    "pkg:dmg": "electron-builder --mac dmg --prepackaged 'dist/universal/Interview-Terminator.app'",
+    "sign:mas": "electron-osx-sign dist/universal/Interview-Terminator.app --identity='Apple Distribution: YOUR COMPANY (TEAMID)' --entitlements=build/entitlements.mas.plist --entitlements-inherit=build/entitlements.mas.inherit.plist",
+    "pkg:mas": "electron-builder --mac mas --prepackaged 'dist/universal/Interview-Terminator.app'",
+    "ship:website": "npm run mac:dir:x64 && npm run mac:dir:arm64 && npm run merge:universal && npm run sign:website && npm run notarize:website && npm run pkg:dmg",
+    "ship:mas": "npm run mac:dir:x64 && npm run mac:dir:arm64 && npm run merge:universal && npm run sign:mas && npm run pkg:mas",
+    "diagnose:prod": "open \"dist/universal/Interview-Terminator.app\" --args --enable-logging --v=1"
   },
   "keywords": [],
   "author": "",
@@ -34,7 +47,7 @@
     "google-gax": "^4.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openai": "^4.87.3",
-    "sharp": "^0.34.2",
+    "jimp": "^0.22.12",
     "update-electron-app": "^3.1.1",
     "yargs": "^17.7.2"
   },
@@ -54,15 +67,7 @@
         ]
       }
     ],
-    "asar": true,
-    "asarUnpack": [
-      "server.js",
-      "**/node_modules/node-record-lpcm16/**/*",
-      "bin/AudioCapture",
-      "preload.js",
-      "auth-preload.js",
-      "windows-audio-capture.js"
-    ],
+    "asar": false,
     "artifactName": "${productName}-Setup-${arch}.${ext}",
     "icon": "icon_512x512.png",
     "publish": {
@@ -76,10 +81,6 @@
         "to": "."
       },
       {
-        "from": "server.js",
-        "to": "."
-      },
-      {
         "from": "bin/AudioCapture",
         "to": "bin/AudioCapture"
       },
@@ -88,8 +89,8 @@
         "to": "."
       },
       {
-        "from": "node_modules",
-        "to": "node_modules"
+        "from": "app-update.yml",
+        "to": "."
       }
     ],
     "mac": {

@@ -100,10 +100,22 @@ contextBridge.exposeInMainWorld('electron', {
   // Event listeners
   onTranscript: (callback) => ipcRenderer.on('transcript', (_, data) => callback(data)),
   onInterimTranscript: (callback) => ipcRenderer.on('interim-transcript', (_, data) => callback(data)),
-  onSuggestion: (callback) => ipcRenderer.on('suggestion', (_, data) => callback(data)),
-  onSuggestionChunk: (callback) => ipcRenderer.on('suggestion-chunk', (_, data) => callback(data)),
-  onSuggestionPartial: (callback) => ipcRenderer.on('suggestion-partial', (_, data) => callback(data)),
-  onSuggestionProcessing: (callback) => ipcRenderer.on('suggestion-processing', (_, data) => callback(data)),
+  onSuggestion: (callback) => ipcRenderer.on('suggestion', (_, data) => {
+    console.log('🔧 [PRELOAD] Received suggestion:', data);
+    callback(data);
+  }),
+  onSuggestionChunk: (callback) => ipcRenderer.on('suggestion-chunk', (_, data) => {
+    console.log('🔧 [PRELOAD] Received suggestion-chunk:', data);
+    callback(data);
+  }),
+  onSuggestionPartial: (callback) => ipcRenderer.on('suggestion-partial', (_, data) => {
+    console.log('🔧 [PRELOAD] Received suggestion-partial:', data);
+    callback(data);
+  }),
+  onSuggestionProcessing: (callback) => ipcRenderer.on('suggestion-processing', (_, data) => {
+    console.log('🔧 [PRELOAD] Received suggestion-processing:', data);
+    callback(data);
+  }),
   onRecordingStatus: (callback) => ipcRenderer.on('recording-status', (_, data) => callback(data)),
   onContextUpdate: (callback) => ipcRenderer.on('context-update', (_, data) => callback(data)),
   onError: (callback) => ipcRenderer.on('error', (_, data) => callback(data)),
@@ -154,11 +166,21 @@ contextBridge.exposeInMainWorld('electron', {
   },
   // Open external links in default browser
   openExternal: (url) => ipcRenderer.send('open-external', url),
-  downloadUpdate: () => ipcRenderer.invoke('download-update'),
-  installUpdate: () => ipcRenderer.invoke('install-update'),
+  
+  // Environment variables for renderer
+  getEnvVars: () => {
+    return {
+      SUPABASE_URL: process.env.SUPABASE_URL,
+      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+    };
+  },
+  // Update management
+  downloadUpdate: () => ipcRenderer.send('download-update'),
+  restartAndInstallUpdate: () => ipcRenderer.send('restart-and-install-update'),
   onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (_, data) => callback(data)),
+  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', (_, data) => callback(data)),
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (_, data) => callback(data)),
-  onUpdateProgress: (callback) => ipcRenderer.on('update-progress', (_, data) => callback(data)),
+  onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (_, data) => callback(data)),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (_, data) => callback(data)),
   getSuggestion: (text) => ipcRenderer.send('get-suggestion', { text }),
   
@@ -202,6 +224,8 @@ contextBridge.exposeInMainWorld('electron', {
   // Preload microphone check
   preloadMicCheck: () => ipcRenderer.invoke('preload-mic-check')
 });
+
+// The entire 'auth' context bridge is removed to prevent conflicts with renderer-auth.js
 
 // Handle microphone access check requests from main process
 ipcRenderer.on('check-microphone-access', async (_e, { id }) => {

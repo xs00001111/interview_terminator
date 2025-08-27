@@ -2,18 +2,45 @@
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
+
+// Load environment variables in order of priority
 const envCandidates = [
-  path.join(__dirname, '.env.production'),               // inside asar (mac build)
+  path.join(__dirname, '.env.production'),               // inside asar (mac build)  
   path.join(process.resourcesPath, '.env.production'),   // alongside resources (win build)
+  path.join(__dirname, '.env'),                          // development fallback
 ];
+
+let envLoaded = false;
 for (const p of envCandidates) {
-  if (fs.existsSync(p)) { dotenv.config({ path: p }); break; }
+  if (fs.existsSync(p)) { 
+    dotenv.config({ path: p }); 
+    console.log('[ENV] Loaded environment from:', p);
+    envLoaded = true;
+    break; 
+  }
+}
+
+if (!envLoaded) {
+  console.log('[ENV] No .env file found, using system environment variables');
 }
 
 const { app, BrowserWindow, screen, ipcMain, globalShortcut, dialog, desktopCapturer, systemPreferences, shell } = require('electron');
 const { BAR_HEIGHT, EXPANDED_HEIGHT, WINDOW_WIDTH } = require('./constants.js');
 const { fork, spawn } = require('child_process');
 const os = require('os');
+
+// Lifecycle diagnostics to identify quit causes
+app.on('before-quit', (e) => {
+  console.log('[LIFE] before-quit fired');
+});
+app.on('will-quit', () => console.log('[LIFE] will-quit fired'));
+app.on('window-all-closed', () => console.log('[LIFE] window-all-closed fired'));
+process.on('uncaughtException', (e) => {
+  console.error('[MAIN uncaughtException]', e && e.stack || e);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('[MAIN unhandledRejection]', e && e.stack || e);
+});
 
 // Check if we're on macOS 15+ (Sequoia) where Swift AudioCapture handles both mic and system audio
 function isMac15Plus() {
@@ -22,8 +49,7 @@ function isMac15Plus() {
   return parseInt(os.release().split('.')[0], 10) >= 24;
 }
 
-// Load environment variables from .env file
-dotenv.config();
+// Environment loading handled above
 
 // Suppress macOS Text Input Method warnings
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
@@ -53,21 +79,153 @@ if (process.platform === 'darwin') {
 
 const { createLogger } = require('./utils/logger');
 const WindowStateManager = require('./utils/window-state-manager');
+
+// Server process management variables
+let serverProcess = null;
+let serverReadyWatchdog = null;
+let appIsQuitting = false;
+
+// Robust server path resolution with proper working directory
+function resolveServer() {
+  if (!app.isPackaged) {
+    const devPath = path.join(__dirname, 'server.js');
+    return { serverPath: devPath, cwd: path.dirname(devPath) };
+  }
+  const candidates = [
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'server.js'),
+    path.join(process.resourcesPath, 'app.asar', 'server.js'),
+    path.join(process.resourcesPath, 'app', 'server.js'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return { serverPath: p, cwd: path.dirname(p) };
+  }
+  // final fallback (should not be used)
+  const fallback = path.join(process.resourcesPath, 'server.js');
+  return { serverPath: fallback, cwd: process.resourcesPath };
+}
+
+// Robust server launcher with comprehensive diagnostics
+function startServer(mainWindow, relayHandlers = {}) {
+  const { serverPath, cwd } = resolveServer();
+  
+  // Boot diagnostics
+  logger.info(`[BOOT] resourcesPath=${process.resourcesPath}`);
+  logger.info(`[BOOT] __dirname=${__dirname}`);
+  logger.info(`[BOOT] serverPath=${serverPath}`);
+  logger.info(`[BOOT] cwd=${cwd}`);
+
+  if (!fs.existsSync(serverPath)) {
+    logger.error(`[FATAL] server.js not found at ${serverPath}`);
+    dialog.showErrorBox('Startup error', `server.js not found:\n${serverPath}`);
+    app.quit();
+    return;
+  }
+
+  // Spawn Electron as Node to run server.js in packaged builds
+  serverProcess = spawn(process.execPath, [serverPath], {
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    cwd
+  });
+
+  logger.info(`[Main] spawned server pid=${serverProcess.pid}`);
+
+  // Pipe logs with structured prefixes
+  serverProcess.stdout?.on('data', d => logger.info(`[server stdout] ${String(d).trim()}`));
+  serverProcess.stderr?.on('data', d => logger.error(`[server stderr] ${String(d).trim()}`));
+
+  // Set up message handler with integrated logic
+  serverProcess.on('message', async (message) => {
+    if (!message || typeof message !== 'object') return;
+    
+    logger.info('🔍 [MAIN→RECEIVED] Main received server message:', message?.type);
+    
+    const { type } = message;
+
+    if (type === 'ready') {
+      logger.info('[Main] Server reported READY');
+      // Clear the watchdog timer
+      if (serverReadyWatchdog) {
+        clearTimeout(serverReadyWatchdog);
+        serverReadyWatchdog = null;
+      }
+      if (mainWindow) {
+        if (!process.env.IS_TEST) {
+          mainWindow.show();
+        }
+        mainWindow.webContents.send('server-ready');
+      }
+      return;
+    }
+
+    // Handle relay patterns for known message types
+    if (relayHandlers[type]) {
+      logger.info('🔍 [DEBUG] Found relay handler for:', type);
+      try { 
+        relayHandlers[type](message); 
+      } catch (e) { 
+        logger.error('relay handler error', e); 
+      }
+      return;
+    }
+
+    // Forward all other messages to renderer for legacy compatibility
+    mainWindow?.webContents.send(type, message);
+    logger.info('🔍 [DEBUG] No relay handler for:', type);
+  });
+
+  serverProcess.on('exit', (code, signal) => {
+    logger.error(`[MAIN] Server exited code=${code} signal=${signal}`);
+    console.log(`[MAIN] Server exited code=${code} signal=${signal}`);
+    if (!appIsQuitting) {
+      // Optional: one-shot restart with delay to avoid loops
+      setTimeout(() => {
+        logger.info('[Main] restarting server...');
+        startServer(mainWindow, relayHandlers);
+      }, 800);
+    }
+  });
+
+  serverProcess.on('error', (err) => {
+    logger.error('[MAIN] Server spawn error:', err);
+    console.error('[MAIN] Server spawn error:', err);
+  });
+
+  // 12s watchdog timer
+  serverReadyWatchdog = setTimeout(() => {
+    logger.error('[Main] Server did not become ready within 12s');
+    mainWindow?.webContents.send('error', {
+      message: 'Background server failed to start. See logs for details.'
+    });
+  }, 12000);
+}
 const { autoUpdater } = require('electron-updater');
 const electronLog = require('electron-log');
 const { createSupabaseClient } = require('./utils/supabase'); // Import Supabase client
+
+// Check if this is a Mac App Store build
+function isMacAppStore() {
+  return process.mas || process.platform === 'darwin' && process.env.MAS_BUILD === 'true';
+}
 
 // Initialize automatic updates
 const setupUpdater = () => {
   electronLog.info('Setting up electron-updater...');
   
+  // Disable auto-updater for Mac App Store builds
+  if (isMacAppStore()) {
+    electronLog.info('Mac App Store build detected - auto-updater disabled');
+    return;
+  }
+  
   // Configure electron-updater for GitHub releases
   autoUpdater.logger = electronLog;
   autoUpdater.logger.transports.file.level = 'info';
   
-  // Only check for updates in packaged app
-  if (!app.isPackaged) {
+  // Only check for updates in packaged app (unless DEV_TEST_UPDATES is set)
+  if (!app.isPackaged && !process.env.DEV_TEST_UPDATES) {
     electronLog.info('Skipping update check in development mode');
+    electronLog.info('Set DEV_TEST_UPDATES=true to enable update testing in dev');
     return;
   }
 
@@ -77,14 +235,23 @@ const setupUpdater = () => {
 
   autoUpdater.on('update-available', (info) => {
     electronLog.info('Update available.', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', info);
+    }
   });
 
   autoUpdater.on('update-not-available', (info) => {
     electronLog.info('Update not available.', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available', info);
+    }
   });
 
   autoUpdater.on('error', (err) => {
     electronLog.error('Error in auto-updater. ' + err);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', { message: err.message, stack: err.stack });
+    }
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
@@ -92,27 +259,41 @@ const setupUpdater = () => {
     log_message = log_message + ' - Downloaded ' + progressObj.percent + '%';
     log_message = log_message + ' (' + progressObj.transferred + "/" + progressObj.total + ')';
     electronLog.info(log_message);
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('download-progress', {
+        percent: Math.round(progressObj.percent),
+        transferred: progressObj.transferred,
+        total: progressObj.total,
+        bytesPerSecond: progressObj.bytesPerSecond
+      });
+    }
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     electronLog.info('Update downloaded', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', info);
+    }
   });
 };
 
-// Setup updater only in production
-if (app.isPackaged) {
+// Setup updater only in production (but not for Mac App Store)
+if (app.isPackaged && !isMacAppStore()) {
   setupUpdater();
   // Trigger update check on startup
   app.whenReady().then(() => {
-    autoUpdater.checkForUpdatesAndNotify();
+    // Delay initial check by 10 seconds to allow app to fully load
+    setTimeout(() => {
+      autoUpdater.checkForUpdatesAndNotify();
+    }, 10000);
   });
 }
 
 // Create logger for main process
 const logger = createLogger('Main');
 
-// Global reference to the server process
-let serverProcess;
+// Global reference to the server process (declared at top of file)
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow;
@@ -518,33 +699,24 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false,
       preload: (() => {
-        let preloadPath;
-        
-        if (app.isPackaged) {
-          // For packaged apps, preload.js is in asarUnpack, so it's in app.asar.unpacked
-          if (process.platform === 'darwin') {
-            // macOS: app.asar.unpacked is in Contents/Resources/
-            preloadPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'preload.js');
-          } else {
-            // Windows: app.asar.unpacked is in the app directory
-            preloadPath = path.join(path.dirname(process.execPath), 'resources', 'app.asar.unpacked', 'preload.js');
-          }
-        } else {
-          // Development mode
-          preloadPath = path.join(__dirname, 'preload.js');
+        const fs = require('fs');
+        const path = require('path');
+        const candidates = app.isPackaged
+          ? [
+              path.join(process.resourcesPath, 'app.asar.unpacked', 'preload.js'), // asar+unpack
+              path.join(process.resourcesPath, 'app.asar', 'preload.js'),          // asar packed
+              path.join(process.resourcesPath, 'app', 'preload.js'),               // asar:false (your case)
+              path.join(process.resourcesPath, 'preload.js'),                      // rare layouts
+            ]
+          : [path.join(__dirname, 'preload.js')];
+
+        const found = candidates.find(p => fs.existsSync(p));
+        if (!found) {
+          console.error('[FATAL] preload.js not found:', candidates);
+          // DON'T quit here; let the error surface via 'preload-error'
+          return path.join(process.resourcesPath, 'app', 'preload.js'); // last best guess
         }
-        
-        if (!fs.existsSync(preloadPath)) {
-          console.error('[FATAL] preload.js missing at', preloadPath);
-          console.error('[DEBUG] Checked paths:');
-          console.error('  - app.isPackaged:', app.isPackaged);
-          console.error('  - process.platform:', process.platform);
-          console.error('  - process.resourcesPath:', process.resourcesPath);
-          console.error('  - process.execPath:', process.execPath);
-          console.error('  - __dirname:', __dirname);
-          app.quit();
-        }
-        return preloadPath;
+        return found;
       })(),
       backgroundThrottling: false, // Prevent throttling when in background
       paintWhenInitiallyHidden: true, // Ensure rendering happens even when hidden
@@ -558,17 +730,31 @@ function createWindow() {
     mainWindow.setHiddenInMissionControl(true); // Hide from Mission Control
   }
 
-  // Enable content protection to prevent screen capture
-  mainWindow.setContentProtection(true);
+  // Enable content protection to prevent screen capture (disabled on Windows due to rendering issues)
+  if (process.platform !== 'win32') {
+    mainWindow.setContentProtection(true);
+  }
+
+  // MAIN: see renderer console and crashes in main logs
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    console.log(`[RENDERER ${level}] ${message} (${sourceId}:${line})`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[RENDERER GONE]', details); // {reason:'crashed'|'clean-exit'|...}
+  });
+  mainWindow.on('unresponsive', () => console.error('[WINDOW] unresponsive'));
+  mainWindow.on('closed', () => console.log('[WINDOW] closed'));
 
   // Load index.html directly
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
 
   // Open DevTools only in development mode
-  // if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-  //     mainWindow.webContents.openDevTools();
-  // }
+  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+      
+  }
+
+  
 
   
 
@@ -583,6 +769,12 @@ function createWindow() {
   // Handle window state after creation
   mainWindow.once('ready-to-show', () => {
     logger.info('Window ready-to-show event fired');
+    
+    try { 
+      mainWindow.show(); 
+    } catch (e) {
+      console.error('[WINDOW] Failed to show window:', e);
+    }
     
     // Apply saved minimized state if needed
     if (savedState.isMinimized) {
@@ -744,8 +936,8 @@ function createWindow() {
       const startInterviewRecording = () => {
         clearTimeout(contextTimeout);
         
-        // Record the session start time
-        sessionStartTime = new Date();
+        // Record the session start time (ensure it's not in the future by using current timestamp)
+        sessionStartTime = new Date(Date.now());
         logger.info(`Session started at: ${sessionStartTime.toISOString()}`); // Log start time
         
         // Send the start-recording message to server process
@@ -839,18 +1031,40 @@ function createWindow() {
       micPermissionCache = null;
       logger.debug('[MIC] Cleared permission cache on recording stop');
 
-      // Record session end time
-      const sessionEndTime = new Date();
+      // Capture the session start time before resetting it to avoid race conditions
+      const capturedSessionStartTime = sessionStartTime;
+      
+      // Record session end time (ensure it's not in the future by using current timestamp)
+      let sessionEndTime = new Date(Date.now());
       logger.info(`Session ended at: ${sessionEndTime.toISOString()}`);
 
       // Create the complete session record in Supabase now that we have both start and end times
-      if (sessionStartTime && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+      if (capturedSessionStartTime && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
         try {
           const supabase = createSupabaseClient();
           const userId = authService?.getSession()?.user?.id;
           
           if (userId) {
             logger.info('Creating complete interview session in Supabase...');
+            logger.info(`Session start time: ${capturedSessionStartTime.toISOString()}`);
+            logger.info(`Session end time: ${sessionEndTime.toISOString()}`);
+            
+            // Ensure end time is not earlier than start time
+            if (sessionEndTime < capturedSessionStartTime) {
+              logger.warn('Session end time is earlier than start time, adjusting...');
+              sessionEndTime = new Date(capturedSessionStartTime.getTime() + 1000); // Add 1 second minimum duration
+              logger.info(`Adjusted session end time to: ${sessionEndTime.toISOString()}`);
+            }
+
+            // Additional validation: ensure minimum session duration (1 second)
+            const minDuration = 1000; // 1 second in milliseconds
+            if ((sessionEndTime - capturedSessionStartTime) < minDuration) {
+              logger.warn('Session duration too short, adjusting end time...');
+              sessionEndTime = new Date(capturedSessionStartTime.getTime() + minDuration);
+              logger.info(`Adjusted session end time for minimum duration: ${sessionEndTime.toISOString()}`);
+            }
+
+            logger.info(`Final session duration: ${sessionEndTime - capturedSessionStartTime}ms`);
             
             // Insert the complete session with both start and end times
             const { data, error } = await supabase
@@ -858,7 +1072,7 @@ function createWindow() {
               .insert([
                 {
                   user_id: userId,
-                  start_time: sessionStartTime,
+                  start_time: capturedSessionStartTime,
                   end_time: sessionEndTime
                 }
               ])
@@ -969,10 +1183,18 @@ ipcMain.on('stop-windows-audio-capture', (event) => {
 
   ipcMain.on('windows-audio-capture-success', (event) => {
     logger.info('[WINDOWS-AUDIO] Audio capture started successfully in renderer');
+    // Forward the success status to server process so it can update recording status
+    if (serverProcess) {
+      serverProcess.send({ type: 'windows-audio-capture-success' });
+    }
   });
 
   ipcMain.on('windows-audio-capture-error', (event, errorData) => {
     logger.error('[WINDOWS-AUDIO] Audio capture failed in renderer:', errorData);
+    // Forward the error status to server process so it can send recording failed
+    if (serverProcess) {
+      serverProcess.send({ type: 'windows-audio-capture-error', data: errorData });
+    }
   });
 
   ipcMain.on('system-audio-missing', (event) => {
@@ -1706,9 +1928,12 @@ app.on('open-url', (event, url) => {
 // Handle deep link URLs on Windows/Linux (second instance)
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
+  console.log('[SINGLE] second instance detected → quitting immediately');
   app.quit();
+  // Stop further execution
 } else {
   app.on('second-instance', (event, argv) => {
+    console.log('[SINGLE] second-instance argv=', argv);
     console.log('[DEEP-LINK] Second instance with args:', argv);
     const deepLink = argv.find(a => a.startsWith('myapp://'));
     if (deepLink) {
@@ -1716,17 +1941,26 @@ if (!gotLock) {
       if (mainWindow) {
         mainWindow.webContents.send('auth:callback-url', deepLink);
       }
-      // Focus the main window
-      if (mainWindow) {
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        mainWindow.focus();
-      }
+    }
+    // Focus the existing window; DO NOT quit here
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
 }
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(async () => {
+  // Initialize window state manager first
+  windowStateManager = new WindowStateManager({
+    defaultWidth: 800,
+    defaultHeight: 400
+  });
+  
+  // Create window immediately to prevent window-all-closed event
+  createWindow();
+  
   // Force-allow media permissions in Electron (bypasses Chrome UI)
   const { session } = require('electron');
   
@@ -1770,12 +2004,6 @@ app.whenReady().then(async () => {
       callback({});
     });
   }, { useSystemPicker: false });
-  
-  // Initialize window state manager after app is ready
-  windowStateManager = new WindowStateManager({
-    defaultWidth: 800,
-    defaultHeight: 400
-  });
   
   // Now we can safely get the window state
   isWindowVisible = windowStateManager.getState().isVisible;
@@ -1824,9 +2052,12 @@ app.whenReady().then(async () => {
   }, 60000); // Check every minute
   // Set up IPC handlers for update-related events
   ipcMain.handle('check-for-updates', () => {
-    logger.info('Checking for updates...');
-    // The actual check is handled by update-electron-app automatically
-    // This handler is just for the renderer to trigger manual checks
+    if (isMacAppStore()) {
+      logger.info('Update check disabled for Mac App Store build');
+      return { mas: true, checking: false };
+    }
+    logger.info('Manual check for updates requested');
+    autoUpdater.checkForUpdatesAndNotify();
     return { checking: true };
   });
   
@@ -1838,23 +2069,94 @@ app.whenReady().then(async () => {
     return os.release();
   });
   
-  ipcMain.handle('download-update', () => {
-    logger.info('Download update requested');
-    // update-electron-app handles downloads automatically
-    return { downloading: true };
+  // Update IPC handlers for the new UI
+  ipcMain.on('download-update', () => {
+    if (isMacAppStore()) {
+      logger.info('Download update disabled for Mac App Store build');
+      return;
+    }
+    logger.info('Manual update download requested from UI');
+    autoUpdater.downloadUpdate();
   });
   
-  ipcMain.handle('install-update', () => {
-    logger.info('Install update requested');
-    // update-electron-app handles installation automatically when app restarts
-    return { willInstallOnRestart: true };
+  ipcMain.on('restart-and-install-update', () => {
+    if (isMacAppStore()) {
+      logger.info('Restart and install disabled for Mac App Store build');
+      return;
+    }
+    logger.info('Restart and install update requested from UI');
+    
+    // In development, just log the action instead of actually restarting
+    if (!app.isPackaged) {
+      logger.info('[DEV] Would restart and install update (skipped in development)');
+      if (mainWindow) {
+        mainWindow.webContents.send('update-installed-dev', { message: 'Update would be installed on restart (dev mode)' });
+      }
+      return;
+    }
+    
+    autoUpdater.quitAndInstall();
   });
+
+  // Development-only testing handlers
+  if (!app.isPackaged) {
+    ipcMain.on('dev-trigger-update-available', (event) => {
+      logger.info('[DEV] Triggering mock update-available event');
+      if (mainWindow) {
+        mainWindow.webContents.send('update-available', {
+          version: '1.2.0-dev',
+          releaseDate: new Date().toISOString(),
+          releaseName: 'Development Test Release',
+          releaseNotes: 'This is a test update for development testing'
+        });
+      }
+    });
+
+    ipcMain.on('dev-trigger-download-progress', (event, progress) => {
+      logger.info(`[DEV] Triggering mock download progress: ${progress}%`);
+      if (mainWindow) {
+        mainWindow.webContents.send('download-progress', {
+          percent: progress || Math.random() * 100,
+          transferred: Math.random() * 10000000,
+          total: 10000000,
+          bytesPerSecond: Math.random() * 1000000
+        });
+      }
+    });
+
+    ipcMain.on('dev-trigger-update-downloaded', (event) => {
+      logger.info('[DEV] Triggering mock update-downloaded event');
+      if (mainWindow) {
+        mainWindow.webContents.send('update-downloaded', {
+          version: '1.2.0-dev',
+          downloadedFile: 'mock-update.dmg'
+        });
+      }
+    });
+
+    ipcMain.on('dev-trigger-update-error', (event) => {
+      logger.info('[DEV] Triggering mock update error');
+      if (mainWindow) {
+        mainWindow.webContents.send('update-error', {
+          message: 'Mock update error for development testing',
+          stack: 'Error: This is a test error\n    at testFunction()'
+        });
+      }
+    });
+  }
 const { createClient } = require('@supabase/supabase-js');
+
+// Get Supabase credentials from environment variables
+const supabaseUrl = process.env.SUPABASE_URL || "https://aqhcipqqdtchivmbxrap.supabase.co";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxaGNpcHFxZHRjaGl2bWJ4cmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NzE0NDUsImV4cCI6MjA1NzM0NzQ0NX0.ABSLZyrZ-8LojAriQKlJALmsgChKagrPLXzVabf559Q";
+
+console.log('[MAIN] Supabase URL from env:', !!process.env.SUPABASE_URL);
+console.log('[MAIN] Supabase key from env:', !!process.env.SUPABASE_ANON_KEY);
 
 // Centralized Supabase client
 const supabase = createClient(
-  "https://aqhcipqqdtchivmbxrap.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxaGNpcHFxZHRjaGl2bWJ4cmFwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NzE0NDUsImV4cCI6MjA1NzM0NzQ0NX0.ABSLZyrZ-8LojAriQKlJALmsgChKagrPLXzVabf559Q",
+  supabaseUrl,
+  supabaseAnonKey,
   {
     auth: {
       flowType: 'pkce',
@@ -1943,25 +2245,27 @@ const supabase = createClient(
   });
 
   // Handle auth callback from deep link
-  ipcMain.handle('auth-handle-callback', async (event, url) => {
-    try {
-      logger.info('[AUTH] Handling auth callback:', url);
-      const result = await authService.handleDeepLinkCallback(url);
-      return result;
-    } catch (error) {
-      logger.error('[AUTH] Callback handling failed:', error);
-      return { success: false, error: error.message };
-    }
-  });
+  // TEMPORARILY DISABLED: This conflicts with renderer-auth.js OAuth flow
+  // The renderer-auth.js handles OAuth callbacks directly in the frontend
+  // ipcMain.handle('auth-handle-callback', async (event, url) => {
+  //   try {
+  //     logger.info('[AUTH] Handling auth callback:', url);
+  //     const result = await authService.handleDeepLinkCallback(url);
+  //     return result;
+  //   } catch (error) {
+  //     logger.error('[AUTH] Callback handling failed:', error);
+  //     return { success: false, error: error.message };
+  //   }
+  // });
 
   // Get current session
   ipcMain.handle('auth-get-session', async () => {
     try {
       const session = await authService.getSession();
-      return session;
+      return { session, error: null, data: { session } };
     } catch (error) {
       logger.error('[AUTH] Failed to get session:', error);
-      return null;
+      return { session: null, error: error.message || 'Failed to get session', data: { session: null } };
     }
   });
 
@@ -2172,8 +2476,6 @@ ipcMain.on('mic-permission-denied', async () => {
   }
 });
   
-  createWindow();
-  
   // Register keyboard shortcuts for window movement
   globalShortcut.register('CommandOrControl+Up', () => {
     if (mainWindow) {
@@ -2320,6 +2622,22 @@ ipcMain.on('mic-permission-denied', async () => {
     if (process.platform === 'win32') {
       logger.info('🔍 [MAIN→RECEIVED] Process still connected:', process.connected);
       logger.info('🔍 [MAIN→RECEIVED] Message details:', JSON.stringify(message, null, 2));
+    }
+    
+    if (message.type === 'ready') {
+      logger.info('[Main] Server reported READY');
+      // Clear the watchdog timer
+      if (serverReadyWatchdog) {
+        clearTimeout(serverReadyWatchdog);
+        serverReadyWatchdog = null;
+      }
+      if (mainWindow) {
+        if (!process.env.IS_TEST) {
+          mainWindow.show();
+        }
+        mainWindow.webContents.send('server-ready');
+      }
+      return;
     }
     
     // Special handling for test message
@@ -2518,7 +2836,7 @@ ipcMain.on('mic-permission-denied', async () => {
     if (mainWindow) {
       const forwardableMessages = [
         'transcript', 'interim-transcript', 'suggestion', 'suggestion-chunk', 
-        'suggestion-partial', 'error', 'ready', 'recording-status', 
+        'suggestion-partial', 'suggestion-processing', 'error', 'ready', 'recording-status', 
         'context-update', 'elaboration', 'screenshot-processed', 'processing-screenshot'
       ];
       
@@ -2526,7 +2844,10 @@ ipcMain.on('mic-permission-denied', async () => {
         if (message.type === 'error') {
           logger.error('Server error:', message.data.message);
         }
+        logger.info(`🔍 [MAIN→FORWARD] Forwarding message to renderer: ${message.type}`);
         mainWindow.webContents.send(message.type, message.data);
+      } else {
+        logger.info(`🔍 [MAIN→SKIP] Message type not in forwardable list: ${message.type}`);
       }
     }
   });
@@ -2592,92 +2913,8 @@ ipcMain.on('mic-permission-denied', async () => {
     });
   }
   
-  // Start the server process
-  const serverPath = app.isPackaged 
-    ? (() => {
-        if (process.platform === 'darwin') {
-          // macOS: server.js is in extraResources
-          return path.join(process.resourcesPath, 'server.js');
-        } else {
-          // Windows: server.js is in extraResources
-          return path.join(path.dirname(process.execPath), 'resources', 'server.js');
-        }
-      })()
-    : path.join(__dirname, 'server.js');
-
-  logger.info(`Starting server process from: ${serverPath}`);
-  
-  // Use spawn instead of fork for Windows IPC compatibility
-  // Electron's fork() can have IPC issues on Windows
-  if (process.platform === 'win32') {
-    serverProcess = spawn(process.execPath, [serverPath], {
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_STACK_DUMPING: '1' }
-    });
-    logger.info('Windows: Using spawn() with ELECTRON_RUN_AS_NODE for IPC compatibility');
-  } else {
-    // Use fork on macOS/Linux (works reliably)
-    serverProcess = fork(serverPath, [], {
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-    });
-    logger.info('macOS/Linux: Using fork() for IPC');
-  }
-  
-  // Set up all the event handlers
-  setupServerProcessHandlers(serverProcess);
-  
-  // Attach message handler AFTER process creation
-  setupServerMessageHandler(serverProcess);
-
-  // Windows-specific debugging
-  logger.info(`🔍 [WINDOWS-DEBUG] Server process created:`);
-  logger.info(`  - PID: ${serverProcess.pid}`);
-  logger.info(`  - Connected: ${serverProcess.connected}`);
-  logger.info(`  - Killed: ${serverProcess.killed}`);
-  logger.info(`  - Platform: ${process.platform}`);
-  logger.info(`  - Node version: ${process.version}`);
-  logger.info(`  - Electron version: ${process.versions.electron}`);
-  
-  // Windows-specific connection monitoring
-  if (process.platform === 'win32') {
-    const connectionMonitor = setInterval(() => {
-      if (serverProcess) {
-        logger.info('🔍 [CONNECTION-MONITOR] State:', {
-          connected: serverProcess.connected,
-          killed: serverProcess.killed,
-          exitCode: serverProcess.exitCode,
-          signalCode: serverProcess.signalCode,
-          pid: serverProcess.pid
-        });
-      } else {
-        logger.error('🔍 [CONNECTION-MONITOR] serverProcess is null');
-        clearInterval(connectionMonitor);
-      }
-    }, 3000); // Check every 3 seconds
-    
-    // Clear monitor when app quits
-    app.on('before-quit', () => {
-      clearInterval(connectionMonitor);
-    });
-  }
-  
-  // Test immediate IPC right after process creation
-  setTimeout(() => {
-    logger.info('🔍 [WINDOWS-DEBUG] Testing immediate IPC after 1 second...');
-    if (serverProcess && serverProcess.connected) {
-      try {
-        serverProcess.send({ type: 'ping-from-main', timestamp: Date.now() });
-        logger.info('🔍 [WINDOWS-DEBUG] Ping message sent to server');
-      } catch (error) {
-        logger.error('🔍 [WINDOWS-DEBUG] Failed to send ping:', error);
-      }
-    } else {
-      logger.error('🔍 [WINDOWS-DEBUG] Cannot ping - server not connected');
-    }
-  }, 1000);
-  
-  // Log when server is ready
-  logger.info('Server process setup complete, waiting for ready signal...');
+  // Start the robust server with comprehensive diagnostics
+  startServer(mainWindow, relay);
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window when the dock icon is clicked
@@ -2711,6 +2948,7 @@ app.on('window-all-closed', function () {
 app.on('before-quit', () => {
   logger.info('Application is about to quit');
   app.isQuitting = true;
+  appIsQuitting = true;
   if (serverProcess) {
     try {
       logger.info('Removing server process listeners and terminating process');
@@ -2809,17 +3047,10 @@ function toggleWindowVisibility() {
   }
 }
 
-// Quit when all windows are closed, except on macOS
-app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') {
-    app.isQuitting = true;
-    app.quit();
-  }
-});
-
 // Handle before-quit event to clean up resources
 app.on('before-quit', () => {
   app.isQuitting = true;
+  appIsQuitting = true;
   if (serverProcess) {
     try {
       serverProcess.removeAllListeners();
